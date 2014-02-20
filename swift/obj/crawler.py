@@ -44,14 +44,11 @@ class ObjectCrawler(Daemon):
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.swift_dir = conf.get('swift_dir', '/etc/swift')
         self.interval = int(conf.get('interval', 30))
-        self.container_ring = None
-        self.concurrency = int(conf.get('concurrency', 1))
-        self.slowdown = float(conf.get('slowdown', 0.01))
-        self.node_timeout = int(conf.get('node_timeout', 10))
-        self.conn_timeout = float(conf.get('conn_timeout', .5))
-        self.successes = 0
-        self.failures = 0
-
+        #self.container_ring = None
+        #self.concurrency = int(conf.get('concurrency', 1))
+        #self.slowdown = float(conf.get('slowdown', 0.01))
+        #self.node_timeout = int(conf.get('node_timeout', 10))
+        #self.conn_timeout = float(conf.get('conn_timeout', .5))
         self.last_time_ran = time.time()
         self.diskfile_mgr = DiskFileManager(conf, self.logger)
 
@@ -65,25 +62,10 @@ class ObjectCrawler(Daemon):
             except (Exception, Timeout):
                 with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
                     f.write("Timeout ERROR!!!!\n")
-                self.logger.increment('errors')
-                self.logger.exception(_('ERROR crawling'))
             time.sleep(self.interval)
 
     def run_once(self, *args, **kwargs):
         """Run the updater once."""
-        # self.logger.info(_('Begin object update single threaded sweep'))
-        # begin = time.time()
-        # self.successes = 0
-        # self.failures = 0
-        # for device in os.listdir(self.devices):
-        #     if self.mount_check and \
-        #             not ismount(os.path.join(self.devices, device)):
-        #         self.logger.increment('errors')
-        #         self.logger.warn(
-        #             _('Skipping %s as it is not mounted'), device)
-        #         continue
-        #     self.object_sweep(os.path.join(self.devices, device))
-        # elapsed = time.time() - begin
         self.object_sweep()
 
     def object_sweep(self):
@@ -97,7 +79,6 @@ class ObjectCrawler(Daemon):
         all_locs = self.diskfile_mgr.object_audit_location_generator()
         metaList = []
         for location in all_locs:
-#            metaDict = {}
             metaDict = self.collect_object(location)
             if metaDict != {}:
                 metaList.append(metaDict)
@@ -122,5 +103,3 @@ class ObjectCrawler(Daemon):
             with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
                 f.write("DISKFILE DOES NOT EXIST\n")
         return metadata
-
-
