@@ -26,8 +26,8 @@ from eventlet import patcher, Timeout
 from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.ring import Ring
-from swift.common.utils import get_logger, renamer, write_pickle, \
-    dump_recon_cache, config_true_value, ismount, json
+from swift.common.utils import get_logger, config_true_value, \
+    ismount, json
 from swift.common.daemon import Daemon
 from swift.obj.diskfile import *
 from swift.common.http import is_success, HTTP_NOT_FOUND, \

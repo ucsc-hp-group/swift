@@ -22,8 +22,7 @@ import swift.common.db
 from swift.container import server as container_server
 from swift.container.backend import ContainerBroker
 from swift.common.utils import get_logger, audit_location_generator, \
-    config_true_value, dump_recon_cache, ratelimit_sleep, \
-    normalize_timestamp, json
+    config_true_value, normalize_timestamp, json
 from swift.common.daemon import Daemon
 
 from eventlet import Timeout
