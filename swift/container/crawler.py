@@ -78,7 +78,7 @@ class ContainerCrawler(Daemon):
 
     def container_crawl(self, path):
         """
-        Crawls the given container path
+        Crawls the given container path.
 
         :param path: the path to an container db
         """
