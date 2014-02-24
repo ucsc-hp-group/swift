@@ -32,6 +32,8 @@ class MetaDatabase(DatabaseBroker):
                 account_bytes_used INTEGER,
                 account_meta TEXT
             );
+
+            CREATE UNIQUE INDEX uid_account ON account_metadata(ROWID);
         """)
     def create_container_md_table(self, conn):
         conn.executescript("""
@@ -54,6 +56,8 @@ class MetaDatabase(DatabaseBroker):
                 container_bytes_used INTEGER,
                 container_meta TEXT
             );
+
+            CREATE UNIQUE INDEX uid_container ON container_metadata(ROWID);
         """)
 
     def create_object_md_table(self, conn):
@@ -92,4 +96,57 @@ class MetaDatabase(DatabaseBroker):
                 object_access_control_request_headers TEXT,
                 object_meta TEXT
             );
+
+            CREATE UNIQUE INDEX uid_object ON object_metadata(ROWID);
         """)
+
+    # Insert metadata into the DB
+    def insert_account_md(self, conn, data):      
+        # Query template
+        query = """
+            INSERT INTO account_metadata (
+                account_uri,
+                account_name,
+                account_tenant_id,
+                account_first_use_time,
+                account_last_modified_time,
+                account_last_changed_time,
+                account_delete_time,
+                account_last_activity_time,
+                account_container_count,
+                account_object_count,
+                account_bytes_used,
+                account_meta
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%d,%s)
+            ON DUPLICATE KEY UPDATE
+                account_uri                = VALUES(account_uri),
+                account_name               = VALUES(account_name),
+                account_tenant_id          = VALUES(account_tenant_id),
+                account_first_use_time     = VALUES(account_first_use_time),
+                account_last_modified_time = VALUES(account_last_modified_time),
+                account_last_changed_time  = VALUES(account_last_changed_time),
+                account_delete_time        = VALUES(account_delete_time),
+                account_last_activity_time = VALUES(account_last_activity_time),
+                account_container_count    = VALUES(account_container_count),
+                account_object_count       = VALUES(account_object_count),
+                account_bytes_used         = VALUES(account_bytes_used),
+                account_meta               = VALUES(account_meta)
+            ;
+        """
+        # Build and execute query for each requested insertion
+        for item in data:
+            formatted_query = query % (
+                item['account_uri'],
+                item['account_name'],
+                item['account_tenant_id'],
+                item['account_first_use_time'],
+                item['account_last_modified_time'],
+                item['account_last_changed_time'],
+                item['account_delete_time'],
+                item['account_last_activity_time'],
+                item['account_container_count'],
+                item['account_bytes_used'],
+                item['account_meta']            
+            )
+            conn.executescript(formatted_query)
