@@ -20,7 +20,7 @@ class MetaDatabase(DatabaseBroker):
             CREATE TABLE account_metadata (
                 ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_uri TEXT,
-                account_name TEXT,
+                account_name TEXT UNIQUE,
                 account_tenant_id TEXT,
                 account_first_use_time TEXT DEFAULT '0',
                 account_last_modified_time TEXT DEFAULT '0',
@@ -32,15 +32,14 @@ class MetaDatabase(DatabaseBroker):
                 account_bytes_used INTEGER,
                 account_meta TEXT
             );
-
-            CREATE UNIQUE INDEX uid_account ON account_metadata(ROWID);
+            
         """)
     def create_container_md_table(self, conn):
         conn.executescript("""
             CREATE TABLE container_metadata (
                 ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
                 container_uri TEXT,
-                container_name TEXT,
+                container_name TEXT UNIQUE,
                 container_account_name TEXT,
                 container_create_time TEXT DEFAULT '0',
                 container_last_modified_time TEXT DEFAULT '0',
@@ -66,7 +65,7 @@ class MetaDatabase(DatabaseBroker):
             CREATE TABLE object_metadata (
                 ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
                 object_uri TEXT,
-                object_name TEXT,
+                object_name TEXT UNIQUE,
                 object_account_name TEXT,
                 object_container_name TEXT,
                 object_location TEXT,
@@ -96,8 +95,6 @@ class MetaDatabase(DatabaseBroker):
                 object_access_control_request_headers TEXT,
                 object_meta TEXT
             );
-
-            CREATE UNIQUE INDEX uid_object ON object_metadata(ROWID);
         """)
 
     # Insert metadata into the DB
