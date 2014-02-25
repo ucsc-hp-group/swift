@@ -13,9 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
+import os, json
 from swift.common.swob import Request, Response
-
 
 class MetaDataMiddleware(object):
     """
@@ -26,11 +25,28 @@ class MetaDataMiddleware(object):
     def __init__(self, app, conf):
         self.app = app
         self.conf = conf
-        self.version = None
+        self.mds_ip = conf.get('md-server-ip', '127.0.0.1')
+        self.mds_port = conf.get('md-server-port', '6090')
+        self.version = 'v1'
+
 
     def GET(self, req):
-        """Returns a 200 response with "OK" in the body."""
-        return Response(request=req, body="Place holder for metadata\n", content_type="text/plain")
+        """Handle the query request."""
+        toBody = "Place holder for metadata\n"
+        attrJSON = ""
+        queryString = ""
+        sortPriorityList = []
+        if 'attributes' in req.params:
+            attrString = req.params['attributes']
+            attrList = attrString.split(',')  #send this to metadata server as json
+            attrJSON = json.dumps(attrList)
+        if 'query' in req.params:
+            queryString = req.params['query']
+        if 'sorted' in req.params:
+            sortPriorityList = req.params['sorted'].split(',')
+        return Response(request=req, body=toBody + attrJSON + "\n" +
+                queryString + "\n" + json.dumps(sortPriorityList) + "\n",
+                content_type="text/plain")
 
     def BAD(self, req):
         """Returns a 400 for bad request"""
@@ -42,7 +58,6 @@ class MetaDataMiddleware(object):
             if 'metadata' in req.params: 
                 if req.params['metadata'] == 'v1':
                     handler = self.GET
-                    self.version = req.params['metadata']
                     return handler(req)(env, start_response)
                 else:
                     handler = self.BAD
