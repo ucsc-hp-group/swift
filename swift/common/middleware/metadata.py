@@ -14,45 +14,40 @@
 # limitations under the License.
 
 import os
-
 from swift.common.swob import Request, Response
 
 
 class MetaDataMiddleware(object):
     """
-    Healthcheck middleware used for monitoring.
+    Middleware for metadata queries. See OSMS API
 
-    If the path is /metadata, it will respond 200 with "OK" as the body.
-
-    If the optional config parameter "disable_path" is set, and a file is
-    present at that path, it will respond 503 with "DISABLED BY FILE" as the
-    body.
     """
 
     def __init__(self, app, conf):
         self.app = app
         self.conf = conf
-#       self.disable_path = conf.get('disable_path', '')
+        self.version = None
 
     def GET(self, req):
         """Returns a 200 response with "OK" in the body."""
-        return Response(request=req, body="Place holder for metadata", content_type="text/plain")
+        return Response(request=req, body="Place holder for metadata\n", content_type="text/plain")
 
-#    def DISABLED(self, req):
-#        """Returns a 503 response with "DISABLED BY FILE" in the body."""
-#        return Response(request=req, status=503, body="DISABLED BY FILE",
-#                        content_type="text/plain")
+    def BAD(self, req):
+        """Returns a 400 for bad request"""
+        return Response(request=req, status=400, body="Metadata version bad\n", content_type="text/plain")
 
     def __call__(self, env, start_response):
         req = Request(env)
         try:
-            if req.params["metadata"] == "v1":
-                handler = self.GET
-#                if self.disable_path and os.path.exists(self.disable_path):
-#                    handler = self.DISABLED
-                return handler(req)(env, start_response)
+            if 'metadata' in req.params: 
+                if req.params['metadata'] == 'v1':
+                    handler = self.GET
+                    self.version = req.params['metadata']
+                    return handler(req)(env, start_response)
+                else:
+                    handler = self.BAD
+                    return handler(req)(env, start_response)
         except UnicodeError:
-            # definitely, this is not /metadata
             pass
         return self.app(env, start_response)
 
