@@ -1,4 +1,3 @@
-
 from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.ring import Ring
@@ -7,29 +6,25 @@ from swift.common.http import is_success, HTTP_INTERNAL_SERVER_ERROR
 
 class Sender():
 
-	def __init__(self, conf):
+    def __init__(self, conf):
 
 		self.conn_timeout = float(conf.get('conn_timeout', 0.5))
 
 
 
-	def sendData (metaList, type): 
-	ip = 
-	port =
-	device =
-	updatedData = json.dumps(metaList)
+    def sendData (self, metaList, data_type, server_ip, server_port, device_name):
+        ip = server_ip
+        port = server_port
+        device = device_name
+        updatedData = json.dumps(metaList)
 
-	with ConnectionTimeout(self.conn_timeout):
-          try:
-              headers = {
-
-
-
-
-          					}
+        with ConnectionTimeout(self.conn_timeout):
+            try:
+                headers = {}
                 conn = http_connect(
                     node['ip'], node['port'], node['device'], part,
                     'PUT', updatedData, headers=headers)
+
             except (Exception, Timeout):
                 self.logger.exception(_(
                     'ERROR account update failed with '
@@ -47,5 +42,3 @@ class Sender():
                 return HTTP_INTERNAL_SERVER_ERROR
             finally:
                 conn.close()
-
-
