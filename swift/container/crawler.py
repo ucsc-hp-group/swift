@@ -30,6 +30,8 @@ class ContainerCrawler(Daemon):
         self.conf = conf
         self.logger = get_logger(conf, log_route='container-crawler')
         self.devices = conf.get('devices', '/srv/node')
+        self.ip = conf.get('md-server-ip', '127.0.0.1')
+        self.port = conf.get('md-server-port', '6090')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.interval = int(conf.get('interval', 120))
 
