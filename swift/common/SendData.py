@@ -20,7 +20,8 @@ class Sender():
 
         with ConnectionTimeout(self.conn_timeout):
             try:
-                headers = {}
+                headers = {
++                    'user-agent': data_type}
                 conn = http_connect(
                     node['ip'], node['port'], node['device'], part,
                     'PUT', updatedData, headers=headers)
