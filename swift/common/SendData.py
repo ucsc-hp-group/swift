@@ -1,4 +1,3 @@
-
 from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.ring import Ring
@@ -13,10 +12,10 @@ class Sender():
 
 
 
-	def sendData (metaList, type): 
-	ip = 
-	port =
-	device =
+	def sendData (metaList, type, server_ip, server_port, device_name): 
+	ip = server_ip
+	port = server_port
+	device = device_name
 	updatedData = json.dumps(metaList)
 
 	with ConnectionTimeout(self.conn_timeout):
