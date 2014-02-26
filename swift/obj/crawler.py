@@ -58,8 +58,6 @@ class ObjectCrawler(Daemon):
     def object_sweep(self):
         """
         Scan through all objects and return meta data dict
-
-        :param device: path to device
         """
 
         all_locs = self.diskfile_mgr.object_audit_location_generator()
@@ -75,9 +73,6 @@ class ObjectCrawler(Daemon):
     def collect_object(self, location):
         """
         Process the object metadata
-
-        :param update_path: path to pickled object update file
-        :param device: path to device
         """
         metadata = {}
         try:
