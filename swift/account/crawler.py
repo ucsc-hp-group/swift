@@ -13,18 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import time
-from swift import gettext_ as _
 from random import random
-
-import swift.common.db
 from swift.account import server as account_server
 from swift.account.backend import AccountBroker
 from swift.common.utils import get_logger, audit_location_generator, \
-    config_true_value, normalize_timestamp, json
+    config_true_value, json
 from swift.common.daemon import Daemon
-
 from eventlet import Timeout
 
 
@@ -39,10 +34,7 @@ class AccountCrawler(Daemon):
         self.port = conf.get('md-server-port', '6090')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.interval = int(conf.get('interval', 120))
-
-        #swift.common.db.DB_PREALLOCATION = \
-        #    config_true_value(conf.get('db_preallocation', 'f'))
-        self.crawled_time = time.time() # last time this daemon ran
+        self.crawled_time = time.time()  # last time this daemon ran
 
     def _one_crawler_pass(self):
         all_locs = audit_location_generator(self.devices,
@@ -57,7 +49,6 @@ class AccountCrawler(Daemon):
         with open("/opt/stack/data/swift/logs/acc-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
         #sender.send(metaList)
-
 
     def run_forever(self, *args, **kwargs):
         """Run the account crawler until stopped."""
@@ -76,20 +67,20 @@ class AccountCrawler(Daemon):
         """Run the account crawler once."""
         self._one_crawler_pass()
 
-
     def account_crawl(self, path):
         """
         Crawls the given account path
 
         :param path: the path to an account db
         """
-        start_time = time.time()
+        #start_time = time.time()
         metaDict = {}
         try:
             broker = AccountBroker(path)
             if not broker.is_deleted():
                 #reportedTime = broker.get_info()['put_timestamp']
-                #if normalize_timestamp(self.crawled_time) < reportedTime < normalize_timestamp(start_time):
+                #if normalize_timestamp(self.crawled_time) <
+                #reportedTime < normalize_timestamp(start_time):
                 metaDict = broker.get_info()
         except (Exception, Timeout):
             self.logger.increment('failures')

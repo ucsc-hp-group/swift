@@ -13,25 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import cPickle as pickle
-import os
-import signal
-import sys
 import time
-from swift import gettext_ as _
 from random import random
-
-from eventlet import patcher, Timeout
-
-from swift.common.bufferedhttp import http_connect
-from swift.common.exceptions import ConnectionTimeout
-from swift.common.ring import Ring
-from swift.common.utils import get_logger, config_true_value, \
-    ismount, json
+from swift.common.utils import get_logger, config_true_value, json
 from swift.common.daemon import Daemon
-from swift.obj.diskfile import *
-from swift.common.http import is_success, HTTP_NOT_FOUND, \
-    HTTP_INTERNAL_SERVER_ERROR
+from swift.obj.diskfile import DiskFileManager, DiskFileNotExist
+from eventlet import Timeout
 
 
 class ObjectCrawler(Daemon):
@@ -77,7 +64,6 @@ class ObjectCrawler(Daemon):
         :param device: path to device
         """
 
-         
         all_locs = self.diskfile_mgr.object_audit_location_generator()
         metaList = []
         for location in all_locs:
@@ -87,7 +73,6 @@ class ObjectCrawler(Daemon):
         #sending.send(metaList, "object", self.ip, self.port)
         with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
-        
 
     def collect_object(self, location):
         """
@@ -98,7 +83,6 @@ class ObjectCrawler(Daemon):
         """
         metadata = {}
         try:
-
             df = self.diskfile_mgr.get_diskfile_from_audit_location(location)
             metadata = df.read_metadata()
         except DiskFileNotExist:

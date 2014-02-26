@@ -14,10 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from swift.obj.crawler import ObjectCrawler
+import sys
 from swift.common.utils import parse_options
-from swift.common.daemon import run_daemon
+from swift.common.wsgi import run_wsgi
 
 if __name__ == '__main__':
-    conf_file, options = parse_options(once=True)
-    run_daemon(ObjectCrawler, conf_file, **options)
+    conf_file, options = parse_options()
+    sys.exit(run_wsgi(conf_file,
+                      'metadata-server', default_port=6090, **options))
