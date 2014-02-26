@@ -1,3 +1,6 @@
+#
+# Metadata server
+#
 
 import os, time, traceback
 from datetime import datetime
@@ -12,21 +15,26 @@ from swift.common.db import DatabaseAlreadyExists
 from swift.common.request_helpers import get_param, \
     get_listing_content_type, split_and_validate_path, is_sys_or_user_meta
 
-from swift.common.utils import get_logger, hash_path, public, normalize_timestamp, storage_directory, \
-    validate_sync_to, config_true_value, json, timing_stats, replication, override_bytes_from_content_type
+from swift.common.utils import get_logger, hash_path, public, \
+    normalize_timestamp, storage_directory, validate_sync_to, \
+    config_true_value, json, timing_stats, replication, \
+    override_bytes_from_content_type
 
-from swift.common.constraints import ACCOUNT_LISTING_LIMIT, CONTAINER_LISTING_LIMIT, check_mount, \
-    check_float, check_utf8
+from swift.common.constraints import ACCOUNT_LISTING_LIMIT, \
+CONTAINER_LISTING_LIMIT, check_mount, check_float, check_utf8
+
 from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.db_replicator import ReplicatorRpc
 from swift.common.http import HTTP_NOT_FOUND, is_success
 
-from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPConflict, HTTPCreated, HTTPInternalServerError,\
-    HTTPNoContent, HTTPNotFound,HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
+from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPConflict, \
+    HTTPCreated, HTTPInternalServerError, HTTPNoContent, HTTPNotFound, \
+    HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
     HTTPInsufficientStorage, HTTPException, HeaderKeyDict
 
-from swift.metadata.utils import metadata_listing_response, metadata_deleted_response
+from swift.metadata.utils import metadata_listing_response, \
+    metadata_deleted_response
 
 DATADIR = 'metadata'
 
@@ -61,10 +69,15 @@ class MetadataController(object):
             self.mount_check,
             logger=self.logger
         )
-        self.auto_create_account_prefix = conf.get('auto_create_account_prefix') or '.'
+
+        self.auto_create_account_prefix = conf.get('auto_create_account_prefix') 
+            or '.'
+
         if config_true_value(conf.get('allow_versions', 'f')):
             self.save_headers.append('x-versions-location')
-        swift.common.db.DB_PREALLOCATION = config_true_value(conf.get('db_preallocation', 'f'))
+
+        swift.common.db.DB_PREALLOCATION = config_true_value(
+            conf.get('db_preallocation', 'f'))
 
     def _get_metadata_broker(self, drive, part, account, container, **kwargs):
         """
@@ -95,7 +108,8 @@ class MetadataController(object):
         if given_limit and given_limit.isdigit():
             limit = int(given_limit)
             if limit > listing_limit:
-                return HTTPPreconditionFailed(request=req,body="Max limit is %d" % listing_limit)
+                return HTTPPreconditionFailed(
+                    request=req, body="Max limit is %d" % listing_limit)
 
         marker = get_param(req, 'marker', '')
         end_marker = get_param(req, 'end_marker')
@@ -103,10 +117,11 @@ class MetadataController(object):
 
         # TODO: mount check
 
-        broker = self._get_metadata_broker(drive, partition, account, pending_timeout=0.1, stale_reads_ok=True)
+        broker = self._get_metadata_broker(drive, partition, account, 
+            pending_timeout=0.1, stale_reads_ok=True)
 
-        return metadata_listing_response(account, req, out_content_type, broker, limit, marker, end_marker,
-                                         prefix, delimiter)
+        return metadata_listing_response(account, req, out_content_type, broker, 
+            limit, marker, end_marker, prefix, delimiter)
 
 
     @public

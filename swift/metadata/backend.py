@@ -2,7 +2,9 @@
 import os, time, errno, sqlite3
 from uuid import uuid4
 from swift.common.utils import normalize_timestamp, lock_parent_directory
-from swift.common.db import DatabaseBroker, DatabaseConnectionError, PENDING_CAP, PICKLE_PROTOCOL, utf8encode
+from swift.common.db import DatabaseBroker, DatabaseConnectionError, \
+    PENDING_CAP, PICKLE_PROTOCOL, utf8encode
+
 import cPickle as pickle
 
 # Interface with metadata database
@@ -38,7 +40,6 @@ class MetadataBroker(DatabaseBroker):
                 account_bytes_used INTEGER,
                 account_meta TEXT
             );
-
         """)
     def create_container_md_table(self, conn):
         conn.executescript("""
@@ -146,18 +147,18 @@ class MetadataBroker(DatabaseBroker):
                 )
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%d,%s)
                 ON DUPLICATE KEY UPDATE
-                    account_uri                = VALUES(account_uri),
-                    account_name               = VALUES(account_name),
-                    account_tenant_id          = VALUES(account_tenant_id),
-                    account_first_use_time     = VALUES(account_first_use_time),
-                    account_last_modified_time = VALUES(account_last_modified_time),
-                    account_last_changed_time  = VALUES(account_last_changed_time),
-                    account_delete_time        = VALUES(account_delete_time),
-                    account_last_activity_time = VALUES(account_last_activity_time),
-                    account_container_count    = VALUES(account_container_count),
-                    account_object_count       = VALUES(account_object_count),
-                    account_bytes_used         = VALUES(account_bytes_used),
-                    account_meta               = VALUES(account_meta)
+                    account_uri               = VALUES(account_uri),
+                    account_name              = VALUES(account_name),
+                    account_tenant_id         = VALUES(account_tenant_id),
+                    account_first_use_time    = VALUES(account_first_use_time),
+                    account_last_modified_time= VALUES(account_last_modified_time),
+                    account_last_changed_time = VALUES(account_last_changed_time),
+                    account_delete_time       = VALUES(account_delete_time),
+                    account_last_activity_time= VALUES(account_last_activity_time),
+                    account_container_count   = VALUES(account_container_count),
+                    account_object_count      = VALUES(account_object_count),
+                    account_bytes_used        = VALUES(account_bytes_used),
+                    account_meta              = VALUES(account_meta)
                 ;
             """
             # Build and execute query for each requested insertion
@@ -180,7 +181,8 @@ class MetadataBroker(DatabaseBroker):
     def is_deleted(self, mdtable, timestamp=None):
         '''
         Determine whether a DB is considered deleted
-        :param mdtable: a string representing the relevant object type (account, container, object)
+        :param mdtable: a string representing the relevant object type (account, 
+            container, object)
         :returns: True if the DB is considered deleted, False otherwise
         '''
         if self.db_file != ':memory:' and not os.path.exists(self.db_file):
@@ -195,4 +197,4 @@ class MetadataBroker(DatabaseBroker):
             if timestamp and row['delete_timestamp'] > timestamp:
                 return False
             return (row['object_count'] in (None, '', 0, '0')) and \
-                   (float(row['delete_timestamp']) > float(row['put_timestamp']))
+                (float(row['delete_timestamp']) > float(row['put_timestamp']))
