@@ -7,18 +7,20 @@ from swift.common.http import is_success, HTTP_INTERNAL_SERVER_ERROR
 class Sender():
 
     def __init__(self, conf):
+
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
 
-    def sendData (metaList, type): 
-        ip = 
-        port = 
-        device = 
+    def sendData (self, metaList, data_type, server_ip, server_port, device_name):
+        ip = server_ip
+        port = server_port
+        device = device_name
         updatedData = json.dumps(metaList)
 
         with ConnectionTimeout(self.conn_timeout):
             try:
-                headers = {}
-                conn = http_connect(node['ip'], node['port'], node['device'], part,
+                headers = {'user-agent': data_type}
+                conn = http_connect(
+                    node['ip'], node['port'], node['device'], part,
                     'PUT', updatedData, headers=headers)
 
                 except (Exception, Timeout):
