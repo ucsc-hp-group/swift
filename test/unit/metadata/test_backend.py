@@ -1,0 +1,19 @@
+import hashlib
+import unittest
+from time import sleep, time
+from uuid import uuid4
+
+from swift.account.backend import AccountBroker
+from swift.common.utils import normalize_timestamp
+
+class TestMetadataBroker(unitetest.TestCase):
+
+    '''
+
+    def test_creation(self):
+
+    def test_exception(self):
+
+    def test_empty(self):
+
+    '''

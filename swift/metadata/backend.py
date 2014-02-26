@@ -20,15 +20,14 @@ class MetadataBroker(DatabaseBroker):
         self.create_account_md_table(conn)
         self.create_container_md_table(conn)
         self.create_object_md_table(conn)
-
         self.create_md_stat_tables(conn)
 
     def create_account_md_table(self, conn):
         conn.executescript("""
             CREATE TABLE account_metadata (
                 ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_uri TEXT,
-                account_name TEXT UNIQUE,
+                account_uri TEXT UNIQUE,
+                account_name TEXT,
                 account_tenant_id TEXT,
                 account_first_use_time TEXT DEFAULT '0',
                 account_last_modified_time TEXT DEFAULT '0',
@@ -41,12 +40,13 @@ class MetadataBroker(DatabaseBroker):
                 account_meta TEXT
             );
         """)
+
     def create_container_md_table(self, conn):
         conn.executescript("""
             CREATE TABLE container_metadata (
                 ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
-                container_uri TEXT,
-                container_name TEXT UNIQUE,
+                container_uri TEXT UNIQUE,
+                container_name TEXT,
                 container_account_name TEXT,
                 container_create_time TEXT DEFAULT '0',
                 container_last_modified_time TEXT DEFAULT '0',
@@ -70,8 +70,8 @@ class MetadataBroker(DatabaseBroker):
         conn.executescript("""
             CREATE TABLE object_metadata (
                 ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
-                object_uri TEXT,
-                object_name TEXT UNIQUE,
+                object_uri TEXT UNIQUE,
+                object_name TEXT,
                 object_account_name TEXT,
                 object_container_name TEXT,
                 object_location TEXT,
@@ -102,30 +102,6 @@ class MetadataBroker(DatabaseBroker):
                 object_meta TEXT
             );
         """)
-
-    def create_md_stat_tables(self, conn):
-        '''
-        Create stats tables corresponding to each main table
-        '''
-        query = '''
-            CREATE TABLE %s_metadata_stat (
-                created_at TEXT,
-                put_timestamp TEXT DEFAULT '0',
-                delete_timestamp TEXT DEFAULT '0',
-                object_count INTEGER,
-                bytes_used INTEGER,
-                reported_put_timestamp TEXT DEFAULT '0',
-                reported_delete_timestamp TEXT DEFAULT '0',
-                reported_object_count INTEGER DEFAULT 0,
-                reported_bytes_used INTEGER DEFAULT 0,
-                hash TEXT default '00000000000000000000000000000000',
-                id TEXT,
-                status TEXT DEFAULT '',
-                status_changed_at TEXT DEFAULT '0',
-                x_metadata_sync_point1 INTEGER DEFAULT -1,
-                x_metadata_sync_point2 INTEGER DEFAULT -1
-            );
-        '''
 
     # Query template
     def insert_account_md(self, data):
