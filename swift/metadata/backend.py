@@ -7,6 +7,8 @@ from swift.common.db import DatabaseBroker, DatabaseConnectionError, \
 
 import cPickle as pickle
 
+from swift.metadata.utils import build_insert_sql
+
 # Interface with metadata database
 class MetadataBroker(DatabaseBroker):
 
