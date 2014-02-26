@@ -33,7 +33,7 @@ ALL_SERVERS = ['account-auditor', 'account-server', 'container-auditor',
                'container-replicator', 'container-server', 'container-sync',
                'container-updater', 'object-auditor', 'object-server',
                'object-expirer', 'object-replicator', 'object-updater',
-               'proxy-server', 'account-replicator', 'account-reaper', 
+               'proxy-server', 'account-replicator', 'account-reaper',
                'account-crawler', 'object-crawler', 'container-crawler']
 MAIN_SERVERS = ['proxy-server', 'account-server', 'container-server',
                 'object-server', 'metadata-server']

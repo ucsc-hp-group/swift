@@ -13,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-
 from swift.common.swob import Request, Response
 
 
@@ -36,7 +34,7 @@ class MetaDataMiddleware(object):
 
     def GET(self, req):
         """Returns a 200 response with "OK" in the body."""
-        return Response(request=req, body="Place holder for metadata", content_type="text/plain")
+        return Response(request=req, body="meta", content_type="text/plain")
 
 #    def DISABLED(self, req):
 #        """Returns a 503 response with "DISABLED BY FILE" in the body."""
