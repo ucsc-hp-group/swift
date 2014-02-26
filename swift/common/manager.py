@@ -34,7 +34,8 @@ ALL_SERVERS = ['account-auditor', 'account-server', 'container-auditor',
                'container-updater', 'object-auditor', 'object-server',
                'object-expirer', 'object-replicator', 'object-updater',
                'proxy-server', 'account-replicator', 'account-reaper',
-               'account-crawler', 'object-crawler', 'container-crawler']
+               'account-crawler', 'object-crawler', 'container-crawler',
+               'metadata-server']
 MAIN_SERVERS = ['proxy-server', 'account-server', 'container-server',
                 'object-server', 'metadata-server']
 REST_SERVERS = [s for s in ALL_SERVERS if s not in MAIN_SERVERS]
