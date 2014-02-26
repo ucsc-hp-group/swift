@@ -28,6 +28,8 @@ class ObjectCrawler(Daemon):
         self.conf = conf
         self.logger = get_logger(conf, log_route='object-updater')
         self.devices = conf.get('devices', '/srv/node')
+        self.ip = conf.get('md-server-ip', '127.0.0.1')
+        self.port = conf.get('md-server-port', '6090')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.swift_dir = conf.get('swift_dir', '/etc/swift')
         self.interval = int(conf.get('interval', 30))
@@ -68,7 +70,7 @@ class ObjectCrawler(Daemon):
             metaDict = self.collect_object(location)
             if metaDict != {}:
                 metaList.append(metaDict)
-        #sending.send(metaList)
+        #sending.send(metaList, "object", self.ip, self.port)
         with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
 
