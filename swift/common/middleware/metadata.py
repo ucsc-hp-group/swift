@@ -29,7 +29,6 @@ class MetaDataMiddleware(object):
         self.mds_port = conf.get('md-server-port', '6090')
         self.version = 'v1'
 
-
     def GET(self, req):
         """Handle the query request."""
         toBody = "Place holder for metadata\n"
