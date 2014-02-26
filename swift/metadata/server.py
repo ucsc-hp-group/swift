@@ -26,7 +26,7 @@ from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPConflict, HTTPCr
     HTTPNoContent, HTTPNotFound,HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
     HTTPInsufficientStorage, HTTPException, HeaderKeyDict
 
-from swift.metadata.utils import metadata_listing_response
+from swift.metadata.utils import metadata_listing_response, metadata_deleted_response
 
 DATADIR = 'metadata'
 
@@ -77,23 +77,6 @@ class MetadataController(object):
         kwargs.setdefault('container', container)
         kwargs.setdefault('logger', self.logger)
         return MetadataBroker(**kwargs)
-    '''
-    @public
-    @timing_stats
-    def DELETE(self, req):
-        # Handle HTTP DELETE requests
-
-
-    @public
-    @timing_stats
-    def PUT(self, req):
-        # Handle HTTP PUT requests
-
-    @public
-    @timing_stats
-    def HEAD(self, req):
-        # Handle HTTP HEAD requests
-    '''
 
     @public
     @timing_stats
@@ -125,12 +108,36 @@ class MetadataController(object):
         return metadata_listing_response(account, req, out_content_type, broker, limit, marker, end_marker,
                                          prefix, delimiter)
 
-    '''
+
     @public
     @timing_stats
     def POST(self, req):
-        # Handle HTTP POST requests
-    '''
+        drive, partition, account = split_and_validate_path(req, 3)
+
+        if 'x-timestamp' not in req.headers \
+                or not check_float(req.headers['x-timestamp']):
+            return HTTPBadRequest(
+                body='Missing or bad timestamp',
+                request=req,
+                content_type='text/plain'
+            )
+
+        if self.mount_check and not check_mount(self.root, drive):
+            return HTTPInsufficientStorage(drive=drive,request=req)
+
+        broker = self._get_metadata_broker(drive, partition, account)
+
+        if broker.is_deleted():
+            return metadata_deleted_response(broker, req, HTTPNotFound)
+
+        timestamp = normalize_timestamp(req.headers['x-timestamp'])
+        metadata = {}
+
+        # Update broker info here
+
+        return HTTPNoContent(request=req)
+
+
 
 def app_factory(global_conf, **local_conf):
     """paste.deploy app factory for creating WSGI container server apps"""

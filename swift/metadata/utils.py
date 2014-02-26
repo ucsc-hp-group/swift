@@ -4,6 +4,7 @@ from xml.sax import saxutils
 
 from swift.common.swob import HTTPOk, HTTPNoContent
 from swift.common.utils import json, normalize_timestamp
+from swift.common.db import DatabaseConnectionError
 
 # Fake metadata broker
 class FakeMetadataBroker(object):
@@ -79,3 +80,14 @@ def metadata_listing_response(account, req, response_content_type, broker=None, 
     ret.content_type = response_content_type
     ret.charset = 'utf-8'
     return ret
+
+def metadata_deleted_response(self, broker, req, resp, body=''):
+    headers = {}
+    try:
+        if broker.is_status_deleted():
+            # Account does exist and is marked for deletion
+            headers = {'X-Account-Status': 'Deleted'}
+    except DatabaseConnectionError:
+        # Account does not exist!
+        pass
+    return resp(request=req, headers=headers, charset='utf-8', body=body)
