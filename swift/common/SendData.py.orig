@@ -12,16 +12,30 @@ class Sender():
 
 
 
+<<<<<<< HEAD
     def sendData (self, metaList, data_type, server_ip, server_port, device_name):
         ip = server_ip
         port = server_port
         device = device_name
         updatedData = json.dumps(metaList)
+=======
+	def sendData (metaList, type, server_ip, server_port, device_name): 
+	ip = server_ip
+	port = server_port
+	device = device_name
+	updatedData = json.dumps(metaList)
+
+	with ConnectionTimeout(self.conn_timeout):
+          try:
+              headers = {
+
+
+
+>>>>>>> 1e450dd12d73258b1977248321fb8da152805612
 
         with ConnectionTimeout(self.conn_timeout):
             try:
-                headers = {
-                    'user-agent': data_type}
+                headers = {}
                 conn = http_connect(
                     node['ip'], node['port'], node['device'], part,
                     'PUT', updatedData, headers=headers)
