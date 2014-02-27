@@ -21,6 +21,7 @@ from swift.common.utils import get_logger, audit_location_generator, \
     config_true_value, json
 from swift.common.daemon import Daemon
 from eventlet import Timeout
+from swift.common.SendData import Sender
 
 
 class ContainerCrawler(Daemon):
@@ -51,7 +52,10 @@ class ContainerCrawler(Daemon):
                 metaList.append(metaDict)
         with open("/opt/stack/data/swift/logs/con-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
-        #sender.send(metaList)
+            ContainerSender = Sender()
+            ContainerSender.sendData(self, metaList, 'Container' , self.ip, self.port, self.devices)
+
+
 
     def run_forever(self, *args, **kwargs):
         """Run the container crawler until stopped."""
