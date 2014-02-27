@@ -24,8 +24,8 @@ class FakeMetadataBroker(object):
         return []
 
 # Construct a listing response from metadata DB
-def metadata_listing_response(account, req, response_content_type, broker=None, limit='', marker='', end_marker='',
-                              prefix='', delimiter=''):
+def metadata_listing_response(account, req, response_content_type, broker=None, 
+    limit='', marker='', end_marker='', prefix='', delimiter=''):
     if broker is None:
         broker = FakeMetadataBroker()
     info = broker.get_info()
@@ -91,3 +91,70 @@ def metadata_deleted_response(self, broker, req, resp, body=''):
         # Account does not exist!
         pass
     return resp(request=req, headers=headers, charset='utf-8', body=body)
+
+"""
+'schema' is a dict that looks like this:
+    {
+        'table': <table name>,
+        'columns': [..., {
+            'name': <column name>,
+            'type': <TEXT/INTEGER>,
+            'opts': [...,<DEFAULT/UNIQUE/...>] (?)
+        }]
+    }
+"""
+
+# build a query that creates a table from a given schema
+def build_create_table_sql(schema):
+    query = '''
+        CREATE TABLE %s(
+            ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
+            %s
+        );
+    '''
+
+    ''.join([
+            '%s %s,' % (col['name'] , col['type'])
+        if i < len(schema['columns']) - 1
+        else
+            '%s %s' % (col['name'] , col ['type'])
+        for i, col in enumerate(schema['columns']) 
+    ])
+
+    return query % (schema['table'], qcols)
+
+# build a query that inserts an entry, or updates an extant
+# entry in place
+def build_insert_sql(schema):
+    # schema should be a set of dicts
+    query = 'INSERT INTO %s(%s) VALUES(%s) ON DUPLICATE KEY UPDATE %s;'
+
+    numcols = len(schema['columns']) - 1
+    qcols = ''.join([
+            '%s,' % col['name']
+        if i < numcols
+        else
+            '%s' % col['name']
+        for i, col in enumerate(schema['columns'])
+    ])
+    qtypes = ''.join([
+                u'\u0025s, '
+            if col['type'] == 'TEXT' or col['type'] == "TEXT DEFAULT '0'"
+            else
+                u'\u0025d, '
+        if i < numcols
+        else
+                u'\u0025s'
+            if col['type'] == 'TEXT'
+            else
+                u'\u0025d'
+        for i, col in enumerate(schema['columns'])
+    ])
+    qupdates = ''.join([
+            '%s = VALUES(%s), ' % (col['name'], col['name'])
+        if i < numcols
+        else
+            '%s = VALUES(%s)' % (col['name'], col['name']) 
+        for i, col in enumerate(schema['columns'])
+    ])
+    return query % (schema['table'], qcols, qtypes, qupdates)

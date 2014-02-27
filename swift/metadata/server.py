@@ -123,7 +123,6 @@ class MetadataController(object):
         return metadata_listing_response(account, req, out_content_type, broker, 
             limit, marker, end_marker, prefix, delimiter)
 
-
     @public
     @timing_stats
     def POST(self, req):
@@ -148,7 +147,34 @@ class MetadataController(object):
         timestamp = normalize_timestamp(req.headers['x-timestamp'])
         metadata = {}
 
-        # Update broker info here
+        # Call broker insertion
+        if 'user-agent' not in req.headers:
+            return HTTPBadRequest(
+                body='No user agent specified',
+                request=req,
+                content_type='text/plain'
+            )
+        md_type = req.headers['user-agent']
+        md_data = json.loads(req.body)
+        
+        for item in md_data:
+            # check the user agent type
+            if md_type == 'account_crawler':
+                # insert accounts
+                broker.insert_account_md(item)
+            elif md_type == 'container_crawler':
+                # Insert containers
+                broker.insert_container_md(item)
+            elif md_type == 'object_crawler':
+                # Insert object
+                broker.insert_object_md(item)
+            else
+                # raise exception
+                return HTTPBadRequest(
+                    body='Invalid user agent',
+                    request=req,
+                    content_type='text/plain'
+                )
 
         return HTTPNoContent(request=req)
 

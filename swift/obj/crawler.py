@@ -19,6 +19,7 @@ from swift.common.utils import get_logger, config_true_value, json
 from swift.common.daemon import Daemon
 from swift.obj.diskfile import DiskFileManager, DiskFileNotExist
 from eventlet import Timeout
+from swift.common import SendData as Sender
 
 
 class ObjectCrawler(Daemon):
@@ -68,9 +69,11 @@ class ObjectCrawler(Daemon):
             metaDict = self.collect_object(location)
             if metaDict != {}:
                 metaList.append(metaDict)
-        #sending.send(metaList, "object", self.ip, self.port)
         with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
+            ObjectSender = Sender()
+            ObjectSender.sendData(self, metaList, 'Object' , self.ip, self.port, self.devices)
+
 
     def collect_object(self, location):
         """
