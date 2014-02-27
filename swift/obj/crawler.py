@@ -19,7 +19,7 @@ from swift.common.utils import get_logger, config_true_value, json
 from swift.common.daemon import Daemon
 from swift.obj.diskfile import DiskFileManager, DiskFileNotExist
 from eventlet import Timeout
-from swift.common import SendData as Sender
+from swift.common.SendData import Sender
 
 
 class ObjectCrawler(Daemon):
@@ -51,7 +51,7 @@ class ObjectCrawler(Daemon):
                 self.object_sweep()
             except (Exception, Timeout):
                 with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
-                    f.write("Timeout ERROR!!!!\n")
+                    f.write("Exception on object_sweep\n")
             time.sleep(self.interval)
 
     def run_once(self, *args, **kwargs):
@@ -71,8 +71,10 @@ class ObjectCrawler(Daemon):
                 metaList.append(metaDict)
         with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
-            ObjectSender = Sender()
-            ObjectSender.sendData(self, metaList, 'Object' , self.ip, self.port, self.devices)
+        ObjectSender = Sender(self.conf)
+        resp = ObjectSender.sendData(metaList, 'object_crawler' , self.ip, self.port, self.devices)
+        with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
+            f.write(str(resp))
 
 
     def collect_object(self, location):

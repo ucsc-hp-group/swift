@@ -52,8 +52,8 @@ class ContainerCrawler(Daemon):
                 metaList.append(metaDict)
         with open("/opt/stack/data/swift/logs/con-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
-            ContainerSender = Sender()
-            ContainerSender.sendData(self, metaList, 'Container' , self.ip, self.port, self.devices)
+            ContainerSender = Sender(self.conf)
+            ContainerSender.sendData(metaList, 'container_crawler' , self.ip, self.port, self.devices)
 
 
 

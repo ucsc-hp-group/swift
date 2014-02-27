@@ -21,7 +21,7 @@ from swift.common.utils import get_logger, audit_location_generator, \
     config_true_value, json
 from swift.common.daemon import Daemon
 from eventlet import Timeout
-from swift.common import SendData as Sender
+from swift.common.SendData import Sender
 
 class AccountCrawler(Daemon):
     """Crawls accounts for metadata."""
@@ -48,8 +48,8 @@ class AccountCrawler(Daemon):
                 metaList.append(metaDict)
         with open("/opt/stack/data/swift/logs/acc-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
-            AccountSender = Sender()
-            AccountSender.sendData(self, metaList, 'Account' , self.ip, self.port, self.devices)
+            AccountSender = Sender(self.conf)
+            AccountSender.sendData(metaList, 'account_crawler' , self.ip, self.port, self.devices)
 
     def run_forever(self, *args, **kwargs):
         """Run the account crawler until stopped."""
