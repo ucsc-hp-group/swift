@@ -22,24 +22,23 @@ class Sender():
                 conn = http_connect(
                     node['ip'], node['port'], node['device'], part,
                     'PUT', updatedData, headers=headers)
+            except (Exception, Timeout):
+                err = '''
+                    ERROR account update failed with
+                    %(ip)s:%(port)s/%(device)s (will retry later):
+                '''
+                self.logger.exception(_(err), node)
+                return HTTP_INTERNAL_SERVER_ERROR
 
-                except (Exception, Timeout):
-                    err = '''
-                        ERROR account update failed with 
-                        %(ip)s:%(port)s/%(device)s (will retry later):
-                    '''
-                    self.logger.exception(_(err), node)
-                    return HTTP_INTERNAL_SERVER_ERROR
-
-            with Timeout(self.node_timeout):
-                try:
-                    resp = conn.getresponse()
-                    resp.read()
-                    return resp.status
-                except (Exception, Timeout):
-                    if self.logger.getEffectiveLevel() <= logging.DEBUG:
-                        self.logger.exception(
-                            _('Exception with %(ip)s:%(port)s/%(device)s'), node)
-                    return HTTP_INTERNAL_SERVER_ERROR
-                finally:
-                    conn.close()
+        with Timeout(self.node_timeout):
+            try:
+                resp = conn.getresponse()
+                resp.read()
+                return resp.status
+            except (Exception, Timeout):
+                if self.logger.getEffectiveLevel() <= logging.DEBUG:
+                    self.logger.exception(
+                        _('Exception with %(ip)s:%(port)s/%(device)s'), node)
+                return HTTP_INTERNAL_SERVER_ERROR
+            finally:
+                conn.close()
