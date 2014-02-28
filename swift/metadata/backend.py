@@ -17,12 +17,11 @@ class MetadataBroker(DatabaseBroker):
     db_reclaim_timestamp = 'created_at'
 
     # Initialize DB
-    def _initialize(self, conn):
+    def _initialize(self, conn, timestamp):
         # Create metadata tables
         self.create_account_md_table(conn)
         self.create_container_md_table(conn)
         self.create_object_md_table(conn)
-        self.create_md_stat_tables(conn)
 
     def create_account_md_table(self, conn):
         conn.executescript("""
@@ -141,6 +140,7 @@ class MetadataBroker(DatabaseBroker):
                 ;
             """
             # Build and execute query for each requested insertion
+            conn.commit()
             for item in data:
                 formatted_query = query % (
                     item['account_uri'],
@@ -155,71 +155,75 @@ class MetadataBroker(DatabaseBroker):
                     item['account_bytes_used'],
                     item['account_meta']
                 )
-                conn.executescript(formatted_query)
+                conn.execute(formatted_query)
+            conn.commit()
 
-    def insert_container(self, data):
-        query = '''
-            INSERT INTO container_metadata (
-                container_uri,
-                container_name,
-                container_account_name,
-                container_create_time,
-                container_last_modified_time,
-                container_last_changed_time,
-                container_delete_time,
-                container_last_activity_time,
-                container_read_permissions,
-                container_write_permissions,
-                container_sync_to,
-                container_sync_key,
-                container_versions_location,
-                container_object_count INTEGER,
-                container_bytes_used INTEGER,
-                container_meta
-            )
-            VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %d, %d, %s 
-            )
-            ON DUPLICATE KEY UPDATE 
-                container_uri = VALUES(container_uri),
-                container_name = VALUES(container_name),
-                container_account_name = VALUES(container_account_name),
-                container_create_time = VALUES(container_create_time),
-                container_last_modified_time = VALUES(container_last_modified_time),
-                container_last_changed_time = VALUES(container_last_changed_time),
-                container_delete_time = VALUES(container_delete_time),
-                container_last_activity_time = VALUES(container_last_activity_time),
-                container_read_permissions = VALUES(container_read_permissions),
-                container_write_permissions = VALUES(container_write_permissions),
-                container_sync_to = VALUES(container_sync_to),
-                container_sync_key = VALUES(container_sync_key),
-                container_versions_location = VALUES(container_versions_location),
-                container_object_count INTEGER = VALUES(container_object_count),
-                container_bytes_used INTEGER = VALUES(container_bytes_used),
-                container_meta = VALUES(container_meta)
-            ;
-        '''
-        for item in data:
-            formatted_query = query % (
-                item['container_uri'],
-                item['container_name'],
-                item['container_account_name'],
-                item['container_create_time'],
-                item['container_last_modified_time'],
-                item['container_last_changed_time'],
-                item['container_delete_time'],
-                item['container_last_activity_time'],
-                item['container_read_permissions'],
-                item['container_write_permissions'],
-                item['container_sync_to'],
-                item['container_sync_key'],
-                item['container_versions_location'],
-                item['container_object_count INTEGER'],
-                item['container_bytes_used INTEGER'],
-                item['container_meta']
-            )
-            conn.executescript(formatted_query)
+    def insert_container_md(self, data):
+        with self.get() as conn:
+            query = '''
+                INSERT INTO container_metadata (
+                    container_uri,
+                    container_name,
+                    container_account_name,
+                    container_create_time,
+                    container_last_modified_time,
+                    container_last_changed_time,
+                    container_delete_time,
+                    container_last_activity_time,
+                    container_read_permissions,
+                    container_write_permissions,
+                    container_sync_to,
+                    container_sync_key,
+                    container_versions_location,
+                    container_object_count INTEGER,
+                    container_bytes_used INTEGER,
+                    container_meta
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %d, %d, %s 
+                )
+                ON DUPLICATE KEY UPDATE 
+                    container_uri = VALUES(container_uri),
+                    container_name = VALUES(container_name),
+                    container_account_name = VALUES(container_account_name),
+                    container_create_time = VALUES(container_create_time),
+                    container_last_modified_time = VALUES(container_last_modified_time),
+                    container_last_changed_time = VALUES(container_last_changed_time),
+                    container_delete_time = VALUES(container_delete_time),
+                    container_last_activity_time = VALUES(container_last_activity_time),
+                    container_read_permissions = VALUES(container_read_permissions),
+                    container_write_permissions = VALUES(container_write_permissions),
+                    container_sync_to = VALUES(container_sync_to),
+                    container_sync_key = VALUES(container_sync_key),
+                    container_versions_location = VALUES(container_versions_location),
+                    container_object_count INTEGER = VALUES(container_object_count),
+                    container_bytes_used INTEGER = VALUES(container_bytes_used),
+                    container_meta = VALUES(container_meta)
+                ;
+            '''
+            conn.commit()
+            for item in data:
+                formatted_query = query % (
+                    item['container_uri'],
+                    item['container_name'],
+                    item['container_account_name'],
+                    item['container_create_time'],
+                    item['container_last_modified_time'],
+                    item['container_last_changed_time'],
+                    item['container_delete_time'],
+                    item['container_last_activity_time'],
+                    item['container_read_permissions'],
+                    item['container_write_permissions'],
+                    item['container_sync_to'],
+                    item['container_sync_key'],
+                    item['container_versions_location'],
+                    item['container_object_count INTEGER'],
+                    item['container_bytes_used INTEGER'],
+                    item['container_meta']
+                )
+                conn.execute(formatted_query)
+            conn.commit()
 
     def insert_object_md(self, data):
         with self.get() as conn:
@@ -293,6 +297,7 @@ class MetadataBroker(DatabaseBroker):
                     object_meta = VALUES(object_meta)
                 ;
             '''
+            conn.commit()
             for item in data:
                 formatted_query = query % (
                     item['object_uri'],
@@ -326,7 +331,8 @@ class MetadataBroker(DatabaseBroker):
                     item['object_access_control_request_headers'],
                     item['object_meta']
                 )
-                conn.executescript(formatted_query)
+                conn.execute(formatted_query)
+            conn.commit()
 
     def is_deleted(self, mdtable, timestamp=None):
         '''
@@ -338,13 +344,14 @@ class MetadataBroker(DatabaseBroker):
         if self.db_file != ':memory:' and not os.path.exists(self.db_file):
             return True
         self._commit_puts_stale_ok()
-        with self.get() as conn:
-            query = '''
-                SELECT put_timestamp, delete_timestamp, object_count
-                FROM %s_metadata_stat
-            ''' % mdtable
-            row = conn.execute(query).fetchone()
-            if timestamp and row['delete_timestamp'] > timestamp:
-                return False
-            return (row['object_count'] in (None, '', 0, '0')) and \
-                (float(row['delete_timestamp']) > float(row['put_timestamp']))
+        return False
+        # with self.get() as conn:
+        #     query = '''
+        #         SELECT put_timestamp, delete_timestamp, object_count
+        #         FROM %s_metadata
+        #     ''' % (mdtable.split('_')[0])
+        #     row = conn.execute(query).fetchone()
+        #     if timestamp and row['delete_timestamp'] > timestamp:
+        #         return False
+        #     return (row['object_count'] in (None, '', 0, '0')) and \
+        #         (float(row['delete_timestamp']) > float(row['put_timestamp']))

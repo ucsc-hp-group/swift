@@ -48,8 +48,8 @@ class AccountCrawler(Daemon):
                 metaList.append(metaDict)
         with open("/opt/stack/data/swift/logs/acc-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
-            AccountSender = Sender(self.conf)
-            AccountSender.sendData(metaList, 'account_crawler' , self.ip, self.port, self.devices)
+        AccountSender = Sender(self.conf)
+        AccountSender.sendData(metaList, 'account_crawler' , self.ip, self.port)
 
     def run_forever(self, *args, **kwargs):
         """Run the account crawler until stopped."""

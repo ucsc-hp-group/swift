@@ -48,6 +48,8 @@ class MetadataController(object):
     ]
 
     def __init__(self, conf, logger=None):
+        self.location = conf.get('location', '/srv/node/sdb1/metadata/')
+        self.db_file = os.path.join(self.location, 'meta.db')
         self.logger = logger or get_logger(conf, log_route='metadata-server')
         self.root = conf.get('devices', '/srv/node')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
@@ -70,8 +72,8 @@ class MetadataController(object):
             logger=self.logger
         )
 
-        self.auto_create_account_prefix = conf.get('auto_create_account_prefix') 
-            or '.'
+        # self.auto_create_account_prefix = conf.get('auto_create_account_prefix') 
+        #     or '.'
 
         if config_true_value(conf.get('allow_versions', 'f')):
             self.save_headers.append('x-versions-location')
@@ -79,21 +81,24 @@ class MetadataController(object):
         swift.common.db.DB_PREALLOCATION = config_true_value(
             conf.get('db_preallocation', 'f'))
 
-    def _get_metadata_broker(self, drive, part, account, container, **kwargs):
+    def _get_metadata_broker(self, **kwargs):
         """
         Get a DB broker for the metadata
         """
-        hash = hash_path(account, container)
-        db_dir = storage_directory(DATADIR, part, hash)
-        db_path = os.path.join(self.root, drive, drive)
-        kwargs.setdefault('account', account)
-        kwargs.setdefault('container', container)
-        kwargs.setdefault('logger', self.logger)
+        # hash = hash_path(account, container)
+        # db_dir = storage_directory(DATADIR, part, hash)
+        # db_path = os.path.join(self.root, drive, drive)
+        # kwargs.setdefault('account', account)
+        # kwargs.setdefault('container', container)
+        # kwargs.setdefault('logger', self.logger)
+        kwargs.setdefault('db_file', self.db_file)
         return MetadataBroker(**kwargs)
 
     @public
-    @timing_stats
+    @timing_stats()
     def GET(self, req):
+        with open("/opt/stack/data/swift/logs/metaserver.log", "a+") as f:
+            f.write("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!SERVER\n")
         # Handle HTTP GET requests
         drive, partition, account = split_and_validate_path(req, 3)
         prefix = get_param(req, 'prefix')
@@ -124,27 +129,28 @@ class MetadataController(object):
             limit, marker, end_marker, prefix, delimiter)
 
     @public
-    @timing_stats
-    def POST(self, req):
-        drive, partition, account = split_and_validate_path(req, 3)
+    @timing_stats()
+    def PUT(self, req):
+        #drive, partition, account = split_and_validate_path(req, 3)
 
-        if 'x-timestamp' not in req.headers \
-                or not check_float(req.headers['x-timestamp']):
-            return HTTPBadRequest(
-                body='Missing or bad timestamp',
-                request=req,
-                content_type='text/plain'
-            )
+        # if 'x-timestamp' not in req.headers \
+        #         or not check_float(req.headers['x-timestamp']):
+        #     return HTTPBadRequest(
+        #         body='Missing or bad timestamp',
+        #         request=req,
+        #         content_type='text/plain'
+        #     )
 
-        if self.mount_check and not check_mount(self.root, drive):
-            return HTTPInsufficientStorage(drive=drive,request=req)
+        # if self.mount_check and not check_mount(self.root, drive):
+        #     return HTTPInsufficientStorage(drive=drive,request=req)
+        with open("/opt/stack/data/swift/logs/metaserver.log", "a+") as f:
+                    f.write("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!SERVER\n")
+        broker = self._get_metadata_broker()
 
-        broker = self._get_metadata_broker(drive, partition, account)
+        # if broker.is_deleted():
+        #     return metadata_deleted_response(broker, req, HTTPNotFound)
 
-        if broker.is_deleted():
-            return metadata_deleted_response(broker, req, HTTPNotFound)
-
-        timestamp = normalize_timestamp(req.headers['x-timestamp'])
+        # timestamp = normalize_timestamp(req.headers['x-timestamp'])
         metadata = {}
 
         # Call broker insertion
@@ -157,27 +163,80 @@ class MetadataController(object):
         md_type = req.headers['user-agent']
         md_data = json.loads(req.body)
         
-        for item in md_data:
-            # check the user agent type
-            if md_type == 'account_crawler':
-                # insert accounts
-                broker.insert_account_md(item)
-            elif md_type == 'container_crawler':
-                # Insert containers
-                broker.insert_container_md(item)
-            elif md_type == 'object_crawler':
-                # Insert object
-                broker.insert_object_md(item)
-            else
-                # raise exception
-                return HTTPBadRequest(
-                    body='Invalid user agent',
-                    request=req,
-                    content_type='text/plain'
-                )
+        if not os.path.exists(broker.db_file):
+            try:
+                broker.initialize(time.time())
+                created = True
+            except DatabaseAlreadyExists:
+                created = False
+        else:
+            created = broker.is_deleted(md_type)
+            # broker.update_put_timestamp(time.time())
+            if broker.is_deleted(md_type):
+                return HTTPConflict(request=req)
 
+        # check the user agent type
+        if md_type == 'account_crawler':
+            # insert accounts
+            broker.insert_account_md(md_data)
+        elif md_type == 'container_crawler':
+            # Insert containers
+            broker.insert_container_md(md_data)
+        elif md_type == 'object_crawler':
+            # Insert object
+            broker.insert_object_md(md_data)
+        else:
+            # raise exception
+            return HTTPBadRequest(
+                body='Invalid user agent',
+                request=req,
+                content_type='text/plain'
+            )
         return HTTPNoContent(request=req)
 
+    def __call__(self, env, start_response):
+        start_time = time.time()
+        req = Request(env)
+        self.logger.txn_id = req.headers.get('x-trans-id', None)
+        if not check_utf8(req.path_info):
+            res = HTTPPreconditionFailed(body='Invalid UTF8 or contains NULL')
+        else:
+            try:
+                # disallow methods which have not been marked 'public'
+                try:
+                    method = getattr(self, req.method)
+                    getattr(method, 'publicly_accessible')
+                    replication_method = getattr(method, 'replication', False)
+                    if (self.replication_server is not None and
+                            self.replication_server != replication_method):
+                        raise AttributeError('Not allowed method.')
+                except AttributeError:
+                    res = HTTPMethodNotAllowed()
+                else:
+                    res = method(req)
+            except HTTPException as error_response:
+                res = error_response
+            except (Exception, Timeout):
+                self.logger.exception(_(
+                    'ERROR __call__ error with %(method)s %(path)s '),
+                    {'method': req.method, 'path': req.path})
+                res = HTTPInternalServerError(body=traceback.format_exc())
+        trans_time = '%.4f' % (time.time() - start_time)
+        # if self.log_requests:
+        #     log_message = '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %s' % (
+        #         req.remote_addr,
+        #         time.strftime('%d/%b/%Y:%H:%M:%S +0000',
+        #                       time.gmtime()),
+        #         req.method, req.path,
+        #         res.status.split()[0], res.content_length or '-',
+        #         req.headers.get('x-trans-id', '-'),
+        #         req.referer or '-', req.user_agent or '-',
+        #         trans_time)
+        #     if req.method.upper() == 'REPLICATE':
+        #         self.logger.debug(log_message)
+        #     else:
+        #         self.logger.info(log_message)
+        return res(env, start_response)
 
 
 def app_factory(global_conf, **local_conf):

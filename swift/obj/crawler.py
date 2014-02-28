@@ -72,7 +72,7 @@ class ObjectCrawler(Daemon):
         with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
         ObjectSender = Sender(self.conf)
-        resp = ObjectSender.sendData(metaList, 'object_crawler' , self.ip, self.port, self.devices)
+        resp = ObjectSender.sendData(metaList, 'object_crawler' , self.ip, self.port)
         with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
             f.write(str(resp))
 
