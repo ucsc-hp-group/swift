@@ -34,7 +34,7 @@ class ContainerCrawler(Daemon):
         self.ip = conf.get('md-server-ip', '127.0.0.1')
         self.port = conf.get('md-server-port', '6090')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
-        self.interval = int(conf.get('interval', 120))
+        self.interval = int(conf.get('interval', 30))
 
         #swift.common.db.DB_PREALLOCATION = \
         #config_true_value(conf.get('db_preallocation', 'f'))
@@ -49,7 +49,7 @@ class ContainerCrawler(Daemon):
         for path, device, partition in all_locs:
             metaDict = self.container_crawl(path)
             if metaDict != {}:
-                metaList.append(metaDict)
+                metaList.append(format_metadata(metaDict))
         with open("/opt/stack/data/swift/logs/con-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
         ContainerSender = Sender(self.conf)
@@ -91,3 +91,25 @@ class ContainerCrawler(Daemon):
         except (Exception, Timeout):
             self.logger.increment('failures')
         return metaDict
+
+def format_metadata (data):
+    metadata = {}
+    uri = "/" + data['account'] + "/" + data['container'] 
+    metadata['container_uri'] = uri
+    metadata['container_name'] = data['container']
+    metadata['container_account_name'] = data['account']
+    metadata['container_create_time'] ='NULL'
+    metadata['container_last_modified_time'] = 'NULL'
+    metadata['container_last_changed_time'] = 'NULL'
+    metadata['container_delete_time'] ='NULL'
+    metadata['container_last_activity_time']  ='NULL'
+    metadata['container_read_permissions'] ='NULL'
+    metadata['container_write_permissions'] ='NULL'
+    metadata['container_sync_to']  ='NULL'
+    metadata['container_sync_key'] ='NULL'
+    metadata['container_versions_location']  ='NULL'
+    metadata['container_object_count']  ='NULL'
+    metadata['container_bytes_used']  ='NULL'
+    metadata['container_delete_at'] ='NULL'
+    metadata['container_meta'] = '{}'
+    return metadata

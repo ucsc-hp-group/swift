@@ -26,8 +26,7 @@ class MetadataBroker(DatabaseBroker):
     def create_account_md_table(self, conn):
         conn.executescript("""
             CREATE TABLE account_metadata (
-                ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_uri TEXT UNIQUE,
+                account_uri TEXT PRIMARY KEY,
                 account_name TEXT,
                 account_tenant_id TEXT,
                 account_first_use_time TEXT DEFAULT '0',
@@ -45,8 +44,7 @@ class MetadataBroker(DatabaseBroker):
     def create_container_md_table(self, conn):
         conn.executescript("""
             CREATE TABLE container_metadata (
-                ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
-                container_uri TEXT UNIQUE,
+                container_uri TEXT PRIMARY KEY,
                 container_name TEXT,
                 container_account_name TEXT,
                 container_create_time TEXT DEFAULT '0',
@@ -63,15 +61,12 @@ class MetadataBroker(DatabaseBroker):
                 container_bytes_used INTEGER,
                 container_meta TEXT
             );
-
-            CREATE UNIQUE INDEX uid_container ON container_metadata(ROWID);
         """)
 
     def create_object_md_table(self, conn):
         conn.executescript("""
             CREATE TABLE object_metadata (
-                ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
-                object_uri TEXT UNIQUE,
+                object_uri TEXT PRIMARY KEY,
                 object_name TEXT,
                 object_account_name TEXT,
                 object_container_name TEXT,
@@ -105,11 +100,10 @@ class MetadataBroker(DatabaseBroker):
         """)
 
     # Data insertion methods
-
     def insert_account_md(self, data):
         with self.get() as conn:
-            query = """
-                INSERT INTO account_metadata (
+            query = '''
+                INSERT OR REPLACE INTO account_metadata (
                     account_uri,
                     account_name,
                     account_tenant_id,
@@ -123,22 +117,9 @@ class MetadataBroker(DatabaseBroker):
                     account_bytes_used,
                     account_meta
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%d,%s)
-                ON DUPLICATE KEY UPDATE
-                    account_uri               = VALUES(account_uri),
-                    account_name              = VALUES(account_name),
-                    account_tenant_id         = VALUES(account_tenant_id),
-                    account_first_use_time    = VALUES(account_first_use_time),
-                    account_last_modified_time= VALUES(account_last_modified_time),
-                    account_last_changed_time = VALUES(account_last_changed_time),
-                    account_delete_time       = VALUES(account_delete_time),
-                    account_last_activity_time= VALUES(account_last_activity_time),
-                    account_container_count   = VALUES(account_container_count),
-                    account_object_count      = VALUES(account_object_count),
-                    account_bytes_used        = VALUES(account_bytes_used),
-                    account_meta              = VALUES(account_meta)
+                VALUES ("%s","%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,"%s")
                 ;
-            """
+            '''
             # Build and execute query for each requested insertion
             conn.commit()
             for item in data:
@@ -152,6 +133,7 @@ class MetadataBroker(DatabaseBroker):
                     item['account_delete_time'],
                     item['account_last_activity_time'],
                     item['account_container_count'],
+                    item['account_object_count'],
                     item['account_bytes_used'],
                     item['account_meta']
                 )
@@ -161,7 +143,7 @@ class MetadataBroker(DatabaseBroker):
     def insert_container_md(self, data):
         with self.get() as conn:
             query = '''
-                INSERT INTO container_metadata (
+                INSERT OR REPLACE INTO container_metadata (
                     container_uri,
                     container_name,
                     container_account_name,
@@ -175,31 +157,14 @@ class MetadataBroker(DatabaseBroker):
                     container_sync_to,
                     container_sync_key,
                     container_versions_location,
-                    container_object_count INTEGER,
-                    container_bytes_used INTEGER,
+                    container_object_count,
+                    container_bytes_used,
                     container_meta
                 )
                 VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %d, %d, %s 
+                    "%s", "%s", "%s", %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, "%s" 
                 )
-                ON DUPLICATE KEY UPDATE 
-                    container_uri = VALUES(container_uri),
-                    container_name = VALUES(container_name),
-                    container_account_name = VALUES(container_account_name),
-                    container_create_time = VALUES(container_create_time),
-                    container_last_modified_time = VALUES(container_last_modified_time),
-                    container_last_changed_time = VALUES(container_last_changed_time),
-                    container_delete_time = VALUES(container_delete_time),
-                    container_last_activity_time = VALUES(container_last_activity_time),
-                    container_read_permissions = VALUES(container_read_permissions),
-                    container_write_permissions = VALUES(container_write_permissions),
-                    container_sync_to = VALUES(container_sync_to),
-                    container_sync_key = VALUES(container_sync_key),
-                    container_versions_location = VALUES(container_versions_location),
-                    container_object_count INTEGER = VALUES(container_object_count),
-                    container_bytes_used INTEGER = VALUES(container_bytes_used),
-                    container_meta = VALUES(container_meta)
                 ;
             '''
             conn.commit()
@@ -218,17 +183,19 @@ class MetadataBroker(DatabaseBroker):
                     item['container_sync_to'],
                     item['container_sync_key'],
                     item['container_versions_location'],
-                    item['container_object_count INTEGER'],
-                    item['container_bytes_used INTEGER'],
+                    item['container_object_count'],
+                    item['container_bytes_used'],
                     item['container_meta']
                 )
+                with open("/opt/stack/data/swift/logs/delete.log", "w") as f:
+                    f.write(formatted_query)
                 conn.execute(formatted_query)
             conn.commit()
 
     def insert_object_md(self, data):
         with self.get() as conn:
             query = '''
-                INSERT INTO object_metadata (
+                INSERT OR REPLACE INTO object_metadata (
                     object_uri,
                     object_name,
                     object_account_name,
@@ -260,41 +227,10 @@ class MetadataBroker(DatabaseBroker):
                     object_access_control_request_headers,
                     object_meta
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d,
-                    %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, 
-                    %s, %s, %s, %s 
+                    "%s", "%s", "%s", "%s", %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
+                    %s, %s, %s, "%s" 
                 )
-                ON DUPLICATE KEY UPDATE
-                    object_uri = VALUES(object_uri),
-                    object_name = VALUES(object_name),
-                    object_account_name = VALUES(object_account_name),
-                    object_container_name = VALUES(object_container_name),
-                    object_location = VALUES(object_location),
-                    object_uri_create_time = VALUES(object_uri_create_time),
-                    object_last_modified_time = VALUES(object_last_modified_time),
-                    object_last_changed_time = VALUES(object_last_changed_time),
-                    object_delete_time = VALUES(object_delete_time),
-                    object_last_activity_time = VALUES(object_last_activity_time),
-                    object_etag_hash = VALUES(object_etag_hash),
-                    object_content_type = VALUES(object_content_type),
-                    object_content_length = VALUES(object_content_length),
-                    object_content_encoding = VALUES(object_content_encoding),
-                    object_content_disposition = VALUES(object_content_disposition),
-                    object_content_language = VALUES(object_content_language),
-                    object_cache_control = VALUES(object_cache_control),
-                    object_delete_at = VALUES(object_delete_at),
-                    object_manifest_type = VALUES(object_manifest_type),
-                    object_manifest = VALUES(object_manifest),
-                    object_access_control_allow_origin = VALUES(object_access_control_allow_origin),
-                    object_access_control_allow_credentials = VALUES(object_access_control_allow_credentials),
-                    object_access_control_expose_headers = VALUES(object_access_control_expose_headers),
-                    object_access_control_max_age = VALUES(object_access_control_max_age),
-                    object_access_control_allow_methods = VALUES(object_access_control_allow_methods),
-                    object_access_control_allow_headers = VALUES(object_access_control_allow_headers),
-                    object_origin = VALUES(object_origin),
-                    object_access_control_request_method = VALUES(object_access_control_request_method),
-                    object_access_control_request_headers = VALUES(object_access_control_request_headers),
-                    object_meta = VALUES(object_meta)
                 ;
             '''
             conn.commit()

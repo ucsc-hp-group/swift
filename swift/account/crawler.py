@@ -33,7 +33,7 @@ class AccountCrawler(Daemon):
         self.ip = conf.get('md-server-ip', '127.0.0.1')
         self.port = conf.get('md-server-port', '6090')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
-        self.interval = int(conf.get('interval', 120))
+        self.interval = int(conf.get('interval', 30))
         self.crawled_time = time.time()  # last time this daemon ran
 
     def _one_crawler_pass(self):
@@ -45,7 +45,7 @@ class AccountCrawler(Daemon):
         for path, device, partition in all_locs:
             metaDict = self.account_crawl(path)
             if metaDict != {}:
-                metaList.append(metaDict)
+                metaList.append(format_metadata(metaDict))
         with open("/opt/stack/data/swift/logs/acc-crawler.log", "a+") as f:
             f.write(json.dumps(metaList))
         AccountSender = Sender(self.conf)
@@ -86,3 +86,20 @@ class AccountCrawler(Daemon):
         except (Exception, Timeout):
             self.logger.increment('failures')
         return metaDict
+
+def format_metadata (data):
+    metadata = {}
+    uri = "/" + data['account']
+    metadata['account_uri'] = uri
+    metadata['account_name'] = data['account']
+    metadata['account_tenant_id'] = 'NULL'
+    metadata['account_first_use_time'] = 'NULL'
+    metadata['account_last_modified_time'] = 'NULL'
+    metadata['account_last_changed_time'] = 'NULL'
+    metadata['account_delete_time']  = 'NULL'
+    metadata['account_last_activity_time']  = 'NULL'
+    metadata['account_container_count'] = 'NULL'
+    metadata['account_object_count'] = 'NULL'
+    metadata['account_bytes_used'] = 'NULL'
+    metadata['account_meta'] = '{}'
+    return metadata

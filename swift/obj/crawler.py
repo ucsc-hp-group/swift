@@ -68,13 +68,11 @@ class ObjectCrawler(Daemon):
         for location in all_locs:
             metaDict = self.collect_object(location)
             if metaDict != {}:
-                metaList.append(metaDict)
-        with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
-            f.write(json.dumps(metaList))
+                metaList.append(format_metadata(metaDict))
         ObjectSender = Sender(self.conf)
         resp = ObjectSender.sendData(metaList, 'object_crawler' , self.ip, self.port)
         with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
-            f.write(str(resp))
+            f.write(resp.read())
 
 
     def collect_object(self, location):
@@ -89,3 +87,39 @@ class ObjectCrawler(Daemon):
             with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
                 f.write("DISKFILE DOES NOT EXIST\n")
         return metadata
+
+def format_metadata (data):
+    metadata = {}
+    uri = data['name'].split("/") 
+    metadata['object_uri'] = data['name']
+    metadata['object_name'] = ("/".join(uri[3:]))
+    metadata['object_account_name'] = uri[1]
+    metadata['object_container_name'] = uri[2]
+    metadata['object_location'] = 'NULL'
+    metadata['object_uri_create_time'] ='NULL'
+    metadata['object_last_modified_time'] ='NULL'
+    metadata['object_last_changed_time'] ='NULL'
+    metadata['object_delete_time'] ='NULL'
+    metadata['object_last_activity_time'] ='NULL'
+    metadata['object_etag_hash'] ='NULL'
+    metadata['object_content_type'] ='NULL'
+    metadata['object_content_length'] = '0'
+    metadata['object_content_encoding'] ='NULL'
+    metadata['object_content_disposition'] ='NULL'
+    metadata['object_content_language'] ='NULL'
+    metadata['object_cache_control'] ='NULL'
+    metadata['object_delete_at'] ='NULL'
+    metadata['object_manifest_type'] ='NULL'
+    metadata['object_manifest'] = '0'
+    metadata['object_access_control_allow_origin'] ='NULL'
+    metadata['object_access_control_allow_credentials'] ='NULL'
+    metadata['object_access_control_expose_headers'] ='NULL'
+    metadata['object_access_control_max_age'] ='NULL'
+    metadata['object_access_control_allow_methods'] ='NULL'
+    metadata['object_access_control_allow_headers'] ='NULL'
+    metadata['object_origin'] ='NULL'
+    metadata['object_access_control_request_method'] ='NULL'
+    metadata['object_access_control_request_headers'] ='NULL'
+    metadata['object_meta'] = "'{}'"
+
+    return metadata

@@ -143,8 +143,7 @@ class MetadataController(object):
 
         # if self.mount_check and not check_mount(self.root, drive):
         #     return HTTPInsufficientStorage(drive=drive,request=req)
-        with open("/opt/stack/data/swift/logs/metaserver.log", "a+") as f:
-                    f.write("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!SERVER\n")
+
         broker = self._get_metadata_broker()
 
         # if broker.is_deleted():
@@ -155,11 +154,14 @@ class MetadataController(object):
 
         # Call broker insertion
         if 'user-agent' not in req.headers:
+
             return HTTPBadRequest(
                 body='No user agent specified',
                 request=req,
                 content_type='text/plain'
             )
+        with open("/opt/stack/data/swift/logs/metaserver.log", "a+") as f:
+            f.write(req.headers['user_agent'] + req.body + "\n")
         md_type = req.headers['user-agent']
         md_data = json.loads(req.body)
         
