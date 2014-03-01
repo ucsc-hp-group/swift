@@ -15,6 +15,7 @@
 
 import os, json
 from swift.common.swob import Request, Response
+from eventlet.green.httplib import HTTPConnection, HTTPResponse
 
 class MetaDataMiddleware(object):
     """
@@ -44,9 +45,10 @@ class MetaDataMiddleware(object):
         if 'sorted' in req.params:
             sortPriorityList = req.params['sorted'].split(',')
 
-        return Response(request=req, body=toBody + attrJSON + "\n" +
-                queryString + "\n" + json.dumps(sortPriorityList) + "\n",
-                content_type="text/plain")
+        #conn = HTTPConnection('%s:%s' % (self.mds_ip, self.md_port))
+        #conn.request('GET', '/')
+        #resp = conn.getresponse()
+        return Response(request=req, body="Place holder for metadata\n", content_type="json")
 
     def BAD(self, req):
         """Returns a 400 for bad request"""
