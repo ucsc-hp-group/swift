@@ -7,7 +7,7 @@ from swift.common.db import DatabaseBroker, DatabaseConnectionError, \
 
 import cPickle as pickle
 
-from swift.metadata.utils import build_insert_sql
+from swift.metadata.utils import build_insert_sql, json
 
 # Interface with metadata database
 class MetadataBroker(DatabaseBroker):
@@ -269,6 +269,26 @@ class MetadataBroker(DatabaseBroker):
                 )
                 conn.execute(formatted_query)
             conn.commit()
+
+    def getAll(self):
+        with self.get() as conn:
+            def dict_factory(cursor, row):
+                d = {}
+                for idx, col in enumerate(cursor.description):
+                    d[col[0]] = row[idx]
+                return d
+
+            conn.row_factory = dict_factory
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM object_metadata")
+            obj_data = cur.fetchall()
+            cur.execute("SELECT * FROM container_metadata")
+            con_data = cur.fetchall()
+            cur.execute("SELECT * FROM account_metadata")
+            acc_data = cur.fetchall()
+        return json.dumps(obj_data) + "\n\n" + json.dumps(con_data) + "\n\n" + json.dumps(acc_data)
+
+
 
     def is_deleted(self, mdtable, timestamp=None):
         '''

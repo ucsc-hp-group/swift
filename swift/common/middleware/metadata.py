@@ -43,6 +43,7 @@ class MetaDataMiddleware(object):
             queryString = req.params['query']
         if 'sorted' in req.params:
             sortPriorityList = req.params['sorted'].split(',')
+
         return Response(request=req, body=toBody + attrJSON + "\n" +
                 queryString + "\n" + json.dumps(sortPriorityList) + "\n",
                 content_type="text/plain")

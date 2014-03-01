@@ -31,7 +31,7 @@ from swift.common.http import HTTP_NOT_FOUND, is_success
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPConflict, \
     HTTPCreated, HTTPInternalServerError, HTTPNoContent, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
-    HTTPInsufficientStorage, HTTPException, HeaderKeyDict
+    HTTPInsufficientStorage, HTTPException, HeaderKeyDict, HTTPOk
 
 from swift.metadata.utils import metadata_listing_response, \
     metadata_deleted_response
@@ -97,36 +97,10 @@ class MetadataController(object):
     @public
     @timing_stats()
     def GET(self, req):
-        with open("/opt/stack/data/swift/logs/metaserver.log", "a+") as f:
-            f.write("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!SERVER\n")
         # Handle HTTP GET requests
-        drive, partition, account = split_and_validate_path(req, 3)
-        prefix = get_param(req, 'prefix')
-        delimiter = get_param(req, 'delimiter')
-
-        if delimiter and (len(delimiter) > 1 or ord(delimiter) > 254):
-            return HTTPPreconditionFailed(body="Bad Delimiter")
-
-        listing_limit = min(ACCOUNT_LISTING_LIMIT, CONTAINER_LISTING_LIMIT)
-        given_limit = get_param(req, 'limit')
-
-        if given_limit and given_limit.isdigit():
-            limit = int(given_limit)
-            if limit > listing_limit:
-                return HTTPPreconditionFailed(
-                    request=req, body="Max limit is %d" % listing_limit)
-
-        marker = get_param(req, 'marker', '')
-        end_marker = get_param(req, 'end_marker')
-        out_content_type = get_listing_content_type(req)
-
-        # TODO: mount check
-
-        broker = self._get_metadata_broker(drive, partition, account, 
-            pending_timeout=0.1, stale_reads_ok=True)
-
-        return metadata_listing_response(account, req, out_content_type, broker, 
-            limit, marker, end_marker, prefix, delimiter)
+        broker = self._get_metadata_broker()
+        listOfMD = broker.getAll()
+        return Response(request=req, body=listOfMD, content_type="text/plain")
 
     @public
     @timing_stats()
