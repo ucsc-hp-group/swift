@@ -16,6 +16,7 @@
 import os, json
 from swift.common.swob import Request, Response
 from eventlet.green.httplib import HTTPConnection
+from urllib import urlencode
 
 class MetaDataMiddleware(object):
     """
@@ -32,21 +33,9 @@ class MetaDataMiddleware(object):
 
     def GET(self, req):
         """Handle the query request."""
-        toBody = "Place holder for metadata\n"
-        attrJSON = ""
-        queryString = ""
-        sortPriorityList = []
-        if 'attributes' in req.params:
-            attrString = req.params['attributes']
-            attrList = attrString.split(',')  #send this to metadata server as json
-            attrJSON = json.dumps(attrList)
-        if 'query' in req.params:
-            queryString = req.params['query']
-        if 'sorted' in req.params:
-            sortPriorityList = req.params['sorted'].split(',')
-
         conn = HTTPConnection('%s:%s' % (self.mds_ip, self.mds_port))
-        conn.request('GET', '/')
+        headers = req.params
+        conn.request('GET', req.path, headers=headers)
         resp = conn.getresponse()
         return Response(request=req, body=resp.read(), content_type="json")
 

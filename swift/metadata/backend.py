@@ -7,7 +7,8 @@ from swift.common.db import DatabaseBroker, DatabaseConnectionError, \
 
 import cPickle as pickle
 
-from swift.metadata.utils import build_insert_sql, json
+from swift.metadata.utils import build_insert_sql
+from swift.common.utils import json
 
 # Interface with metadata database
 class MetadataBroker(DatabaseBroker):
@@ -272,12 +273,6 @@ class MetadataBroker(DatabaseBroker):
 
     def getAll(self):
         with self.get() as conn:
-            def dict_factory(cursor, row):
-                d = {}
-                for idx, col in enumerate(cursor.description):
-                    d[col[0]] = row[idx]
-                return d
-
             conn.row_factory = dict_factory
             cur = conn.cursor()
             cur.execute("SELECT * FROM object_metadata")
@@ -288,7 +283,31 @@ class MetadataBroker(DatabaseBroker):
             acc_data = cur.fetchall()
         return json.dumps(obj_data) + "\n\n" + json.dumps(con_data) + "\n\n" + json.dumps(acc_data)
 
-
+    def handle_request(self, acc, con, obj, attrs):
+        if attrs == "dump":
+            return self.getAll()
+        with self.get() as conn:
+            conn.row_factory = dict_factory
+            cur = conn.cursor()
+            if obj != "" and obj != None:  #only get stuff from this object
+                if 'all_attrs' in attrs.split(',') or 'all_object_attrs' in attrs.split(','):
+                    cur.execute("SELECT * FROM object_metadata WHERE object_uri=%s" % ("'/" + acc + "/" +  con + "/" + obj + "'"))
+                else:
+                    cur.execute("SELECT %s FROM object_metadata WHERE object_uri=%s" % (attrs, "'/" + acc + "/" +  con + "/" + obj + "'"))
+                return json.dumps(cur.fetchall())
+            elif con != "" and con != None:  #only get stuff from this container
+                if 'all_attrs' in attrs.split(',') or 'all_container_attrs' in attrs.split(','):
+                    cur.execute("SELECT * FROM container_metadata WHERE container_uri=%s" % ("'/" + acc + "/" +  con + "'"))
+                else:
+                    cur.execute("SELECT %s FROM container_metadata WHERE container_uri=%s" % (attrs, "'/" + acc + "/" +  con + "'"))
+                return json.dumps(cur.fetchall())
+            elif acc != "" and acc != None:  #only get stuff from this account
+                if 'all_attrs' in attrs.split(',') or 'all_account_attrs' in attrs.split(','):
+                    cur.execute("SELECT * FROM account_metadata WHERE account_uri=%s" % ("'/" + acc + "'"))
+                else:
+                    cur.execute("SELECT %s FROM account_metadata WHERE account_uri=%s" % (attrs, "'/" + acc + "'"))
+                return json.dumps(cur.fetchall())
+        return ""
 
     def is_deleted(self, mdtable, timestamp=None):
         '''
@@ -311,3 +330,10 @@ class MetadataBroker(DatabaseBroker):
         #         return False
         #     return (row['object_count'] in (None, '', 0, '0')) and \
         #         (float(row['delete_timestamp']) > float(row['put_timestamp']))
+
+
+def dict_factory(cursor, row):
+                d = {}
+                for idx, col in enumerate(cursor.description):
+                    d[col[0]] = row[idx]
+                return d

@@ -18,7 +18,7 @@ from swift.common.request_helpers import get_param, \
 from swift.common.utils import get_logger, hash_path, public, \
     normalize_timestamp, storage_directory, validate_sync_to, \
     config_true_value, json, timing_stats, replication, \
-    override_bytes_from_content_type
+    override_bytes_from_content_type, split_path
 
 from swift.common.constraints import ACCOUNT_LISTING_LIMIT, \
 CONTAINER_LISTING_LIMIT, check_mount, check_float, check_utf8
@@ -94,13 +94,110 @@ class MetadataController(object):
         kwargs.setdefault('db_file', self.db_file)
         return MetadataBroker(**kwargs)
 
+    def check_attrs(self, attrs, acc, con, obj):
+        """
+        Verify that attributes are valid
+        """
+        if attrs in ['all_attrs', #TODO: maybe put these below
+                        'all_system_attrs', #and handle here
+                        'all_meta_attrs',
+                        'all_account_attrs'
+                        'all_account_system_attrs',
+                        'all_account_meta_attrs',
+                        'all_container_attrs',
+                        'all_container_system_attrs'
+                        'all_container_meta_attrs',
+                        'all_object_attrs',
+                        'all_object_system_attrs'
+                        'all_object_meta_attrs',
+                        'dump']:
+                return True
+        if obj != "" and obj != None:
+            for attr in attrs.split(','):
+                if attr not in ['object_uri',
+                        'object_name',
+                        'object_account_name',
+                        'object_container_name',
+                        'object_location',
+                        'object_uri_create_time',
+                        'object_last_modified_time',
+                        'object_last_changed_time',
+                        'object_delete_time',
+                        'object_last_activity_time',
+                        'object_etag_hash',
+                        'object_content_type',
+                        'object_content_length',
+                        'object_content_encoding',
+                        'object_content_disposition',
+                        'object_content_language',
+                        'object_cache_control',
+                        'object_delete_at',
+                        'object_manifest_type',
+                        'object_manifest',
+                        'object_access_control_allow_origin',
+                        'object_access_control_allow_credentials',
+                        'object_access_control_expose_headers',
+                        'object_access_control_max_age',
+                        'object_access_control_allow_methods',
+                        'object_access_control_allow_headers',
+                        'object_origin',
+                        'object_access_control_request_method',
+                        'object_access_control_request_headers',
+                        'object_meta']:
+                    return False
+        elif con != "" and con != None:
+            for attr in attrs.split(','):
+                if attr not in ['container_uri',
+                        'container_name',
+                        'container_account_name',
+                        'container_create_time',
+                        'container_last_modified_time',
+                        'container_last_changed_time',
+                        'container_delete_time',
+                        'container_last_activity_time',
+                        'container_read_permissions',
+                        'container_write_permissions',
+                        'container_sync_to',
+                        'container_sync_key',
+                        'container_versions_location',
+                        'container_object_count',
+                        'container_bytes_used',
+                        'container_meta']:
+                    return False
+        elif acc != "" and acc != None:
+            for attr in attrs.split(','):
+                if attr not in ['account_uri',
+                        'account_name',
+                        'account_tenant_id',
+                        'account_first_use_time',
+                        'account_last_modified_time',
+                        'account_last_changed_time',
+                        'account_delete_time',
+                        'account_last_activity_time',
+                        'account_container_count',
+                        'account_object_count',
+                        'account_bytes_used',
+                        'account_meta']:
+                    return False
+        return True
+
     @public
     @timing_stats()
     def GET(self, req):
         # Handle HTTP GET requests
         broker = self._get_metadata_broker()
-        listOfMD = broker.getAll()
-        return Response(request=req, body=listOfMD, content_type="text/plain")
+
+        base_version ,acc, con, obj = split_path(req.path, 1, 4, True)
+        if 'attributes' in req.headers:
+            attrs = req.headers['attributes']
+        else:
+            attrs = "all_attrs"
+
+        ret = "NULL"
+        if self.check_attrs(attrs, acc, con, obj):
+            ret = broker.handle_request(acc,con,obj,attrs)
+        return Response(request=req, body=ret + "\n", content_type="text/plain")
+        # return Response(request=req, body=req.path + '\n' + "attrs= " + attrs + '\n' + acc + '\n' + con + '\n' + obj + '\n', content_type="text/plain")
 
     @public
     @timing_stats()
