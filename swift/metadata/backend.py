@@ -274,9 +274,17 @@ class MetadataBroker(DatabaseBroker):
         with self.get() as conn:
             def dict_factory(cursor, row):
                 d = {}
+                item_dict = {}
                 for idx, col in enumerate(cursor.description):
                     d[col[0]] = row[idx]
-                return d
+                if "object_uri" in d:
+                    uri = d["object_uri"]
+                if "container_uri" in d:
+                    uri = d["container_uri"]
+                if "account_uri" in d:
+                    uri = d["account_uri"]
+                item_dict[uri] = d
+                return item_dict
 
             conn.row_factory = dict_factory
             cur = conn.cursor()
