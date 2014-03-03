@@ -95,31 +95,36 @@ def format_metadata (data):
     metadata['object_name'] = ("/".join(uri[3:]))
     metadata['object_account_name'] = uri[1]
     metadata['object_container_name'] = uri[2]
-    metadata['object_location'] = 'NULL'
-    metadata['object_uri_create_time'] ='NULL'
-    metadata['object_last_modified_time'] ='NULL'
-    metadata['object_last_changed_time'] ='NULL'
-    metadata['object_delete_time'] ='NULL'
-    metadata['object_last_activity_time'] ='NULL'
-    metadata['object_etag_hash'] ='NULL'
-    metadata['object_content_type'] ='NULL'
-    metadata['object_content_length'] = '0'
-    metadata['object_content_encoding'] ='NULL'
-    metadata['object_content_disposition'] ='NULL'
-    metadata['object_content_language'] ='NULL'
-    metadata['object_cache_control'] ='NULL'
-    metadata['object_delete_at'] ='NULL'
-    metadata['object_manifest_type'] ='NULL'
-    metadata['object_manifest'] = '0'
-    metadata['object_access_control_allow_origin'] ='NULL'
-    metadata['object_access_control_allow_credentials'] ='NULL'
-    metadata['object_access_control_expose_headers'] ='NULL'
-    metadata['object_access_control_max_age'] ='NULL'
-    metadata['object_access_control_allow_methods'] ='NULL'
-    metadata['object_access_control_allow_headers'] ='NULL'
-    metadata['object_origin'] ='NULL'
-    metadata['object_access_control_request_method'] ='NULL'
-    metadata['object_access_control_request_headers'] ='NULL'
-    metadata['object_meta'] = "'{}'"
+    metadata['object_location'] = data.setDefault('object_location','NULL')
+    metadata['object_uri_create_time'] = data.setDefault('object_uri_create_time','NULL')
+    metadata['object_last_modified_time'] = data.setDefault('object_last_modified_time','NULL')
+    metadata['object_last_changed_time'] = data.setDefault('object_last_changed_time','NULL')
+    metadata['object_delete_time'] = data.setDefault('delete_time','NULL')
+    metadata['object_last_activity_time'] = data.setDefault('Last_activity_time','NULL')
+    metadata['object_etag_hash'] = data.setDefault('Etag','NULL')
+    metadata['object_content_type'] = data.setDefault('Vontent-Type','NULL')
+    metadata['object_content_length'] = data.setDefault('Content-Length','NULL')
+    metadata['object_content_encoding'] = data.setDefault('Content-Encoding','NULL')
+    metadata['object_content_disposition'] = data.setDefault('object_content_disposition','NULL')
+    metadata['object_content_language'] = data.setDefault('content_language','NULL')
+    metadata['object_cache_control'] = data.setDefault('cache_control','NULL')
+    metadata['object_delete_at'] = data.setDefault('delete_at','NULL')
+    metadata['object_manifest_type'] = data.setDefault('manifest_type','NULL')
+    metadata['object_manifest'] = data.setDefault('manifest_type','0')
+    metadata['object_access_control_allow_origin'] = data.setDefault('access_control_allow_origin','NULL')
+    metadata['object_access_control_allow_credentials'] = data.setDefault('access_control_allow_credentials','NULL')
+    metadata['object_access_control_expose_headers'] = data.setDefault('access_control_expose_headers','NULL')
+    metadata['object_access_control_max_age'] = data.setDefault('access_control_max_age','NULL')
+    metadata['object_access_control_allow_methods'] = data.setDefault('access_control_allow_methods','NULL')
+    metadata['object_access_control_allow_headers'] = data.setDefault('access_control_allow_headers','NULL')
+    metadata['object_origin'] = data.setDefault('origin','NULL')
+    metadata['object_access_control_request_method'] = data.setDefault('access_control_request_method','NULL')
+    metadata['object_access_control_request_headers'] = data.setDefault('access_control_request_headers','NULL')
+
+    metajson = {}
+    for meta in data:
+        if(meta.startswith("X-object_meta")):
+            metajson[meta] = data[meta]
+    metadata['object_meta'] = json.dump(metajson)
 
     return metadata
