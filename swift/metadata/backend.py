@@ -331,9 +331,16 @@ class MetadataBroker(DatabaseBroker):
         #     return (row['object_count'] in (None, '', 0, '0')) and \
         #         (float(row['delete_timestamp']) > float(row['put_timestamp']))
 
-
 def dict_factory(cursor, row):
-                d = {}
-                for idx, col in enumerate(cursor.description):
-                    d[col[0]] = row[idx]
-                return d
+    d = {}
+    item_dict = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    if "object_uri" in d:
+        uri = d["object_uri"]
+    if "container_uri" in d:
+        uri = d["container_uri"]
+    if "account_uri" in d:
+        uri = d["account_uri"]
+    item_dict[uri] = d
+    return item_dict
