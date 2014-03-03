@@ -98,20 +98,6 @@ class MetadataController(object):
         """
         Verify that attributes are valid
         """
-        if attrs in ['all_attrs', #TODO: maybe put these below
-                        'all_system_attrs', #and handle here
-                        'all_meta_attrs',
-                        'all_account_attrs'
-                        'all_account_system_attrs',
-                        'all_account_meta_attrs',
-                        'all_container_attrs',
-                        'all_container_system_attrs'
-                        'all_container_meta_attrs',
-                        'all_object_attrs',
-                        'all_object_system_attrs'
-                        'all_object_meta_attrs',
-                        'dump']:
-                return True
         if obj != "" and obj != None:
             for attr in attrs.split(','):
                 if attr not in ['object_uri',
@@ -179,6 +165,21 @@ class MetadataController(object):
                         'account_bytes_used',
                         'account_meta']:
                     return False
+        else:    
+            for attr in attrs.split(','):
+                if attr not in ['all_attrs', #TODO: maybe put these below
+                        'all_system_attrs', #and handle here
+                        'all_meta_attrs',
+                        'all_account_attrs'
+                        'all_account_system_attrs',
+                        'all_account_meta_attrs',
+                        'all_container_attrs',
+                        'all_container_system_attrs'
+                        'all_container_meta_attrs',
+                        'all_object_attrs',
+                        'all_object_system_attrs'
+                        'all_object_meta_attrs']:
+                    return False
         return True
 
     @public
@@ -190,14 +191,24 @@ class MetadataController(object):
         base_version ,acc, con, obj = split_path(req.path, 1, 4, True)
         if 'attributes' in req.headers:
             attrs = req.headers['attributes']
-        else:
+        elif obj != "" or obj != None:  #if there is no attributes lists, include everything in scope
+            attrs = "all_object_attrs"
+        elif con != "" and con != None:
+            attrs = "all_container_attrs" 
+        elif acc != "" and acc != None:
+            attrs = "all_account_attrs"
+        else: 
             attrs = "all_attrs"
 
-        ret = "NULL"
-        if self.check_attrs(attrs, acc, con, obj):
-            ret = broker.handle_request(acc,con,obj,attrs)
-        return Response(request=req, body=ret + "\n", content_type="text/plain")
-        # return Response(request=req, body=req.path + '\n' + "attrs= " + attrs + '\n' + acc + '\n' + con + '\n' + obj + '\n', content_type="text/plain")
+        
+        if "all_attrs" in attrs.split(','):
+            ret = broker.getAll()
+        elif self.check_attrs(attrs, acc, con, obj):
+            query = broker.get_attributes_query(acc,con,obj,attrs)
+            ret = broker.execute_query(query, acc, con, obj)
+        else:
+            ret = json.dumps(attrs) + str(acc) + " " + str(con) + " " + str(obj)
+        return Response(request=req, body=ret + "\n", content_type="json")
 
     @public
     @timing_stats()

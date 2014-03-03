@@ -283,31 +283,29 @@ class MetadataBroker(DatabaseBroker):
             acc_data = cur.fetchall()
         return json.dumps(obj_data) + "\n\n" + json.dumps(con_data) + "\n\n" + json.dumps(acc_data)
 
-    def handle_request(self, acc, con, obj, attrs):
-        if attrs == "dump":
-            return self.getAll()
+    def get_attributes_query(self, acc, con, obj, attrs):
+        if obj != "" and obj != None:  #only get stuff from this object
+            if 'all_object_attrs' in attrs.split(','):
+                return "SELECT * FROM object_metadata WHERE object_uri=%s" % ("'/" + acc + "/" +  con + "/" + obj + "'")
+            else:
+                return "SELECT %s FROM object_metadata WHERE object_uri=%s" % (attrs, "'/" + acc + "/" +  con + "/" + obj + "'")
+        elif con != "" and con != None:  #only get stuff from this container
+            if 'all_container_attrs' in attrs.split(','):
+                return "SELECT * FROM container_metadata WHERE container_uri=%s" % ("'/" + acc + "/" +  con + "'")
+            else:
+                return "SELECT %s FROM container_metadata WHERE container_uri=%s" % (attrs, "'/" + acc + "/" +  con + "'")
+        elif acc != "" and acc != None:  #only get stuff from this account
+            if'all_account_attrs' in attrs.split(','):
+                return "SELECT * FROM account_metadata WHERE account_uri=%s" % ("'/" + acc + "'")
+            else:
+                return "SELECT %s FROM account_metadata WHERE account_uri=%s" % (attrs, "'/" + acc + "'")
+
+    def execute_query(self, query, acc, con, obj):
         with self.get() as conn:
             conn.row_factory = dict_factory
             cur = conn.cursor()
-            if obj != "" and obj != None:  #only get stuff from this object
-                if 'all_attrs' in attrs.split(',') or 'all_object_attrs' in attrs.split(','):
-                    cur.execute("SELECT * FROM object_metadata WHERE object_uri=%s" % ("'/" + acc + "/" +  con + "/" + obj + "'"))
-                else:
-                    cur.execute("SELECT %s FROM object_metadata WHERE object_uri=%s" % (attrs, "'/" + acc + "/" +  con + "/" + obj + "'"))
-                return json.dumps(cur.fetchall())
-            elif con != "" and con != None:  #only get stuff from this container
-                if 'all_attrs' in attrs.split(',') or 'all_container_attrs' in attrs.split(','):
-                    cur.execute("SELECT * FROM container_metadata WHERE container_uri=%s" % ("'/" + acc + "/" +  con + "'"))
-                else:
-                    cur.execute("SELECT %s FROM container_metadata WHERE container_uri=%s" % (attrs, "'/" + acc + "/" +  con + "'"))
-                return json.dumps(cur.fetchall())
-            elif acc != "" and acc != None:  #only get stuff from this account
-                if 'all_attrs' in attrs.split(',') or 'all_account_attrs' in attrs.split(','):
-                    cur.execute("SELECT * FROM account_metadata WHERE account_uri=%s" % ("'/" + acc + "'"))
-                else:
-                    cur.execute("SELECT %s FROM account_metadata WHERE account_uri=%s" % (attrs, "'/" + acc + "'"))
-                return json.dumps(cur.fetchall())
-        return ""
+            cur.execute(query)
+            return json.dumps(attachURI(cur.fetchall(), acc, con, obj))
 
     def is_deleted(self, mdtable, timestamp=None):
         '''
@@ -333,14 +331,16 @@ class MetadataBroker(DatabaseBroker):
 
 def dict_factory(cursor, row):
     d = {}
-    item_dict = {}
     for idx, col in enumerate(cursor.description):
         d[col[0]] = row[idx]
-    if "object_uri" in d:
-        uri = d["object_uri"]
-    if "container_uri" in d:
-        uri = d["container_uri"]
-    if "account_uri" in d:
-        uri = d["account_uri"]
-    item_dict[uri] = d
-    return item_dict
+    return d
+
+
+def attachURI(metaDict, acc, con, obj):
+    if obj != "" and obj != None:
+        uri = '/'.join(['',acc,con,obj])
+    elif con != "" and con != None :
+        uri = '/'.join(['',acc,con])
+    else:
+        uri = '/' + acc
+    return {uri: metaDict}
