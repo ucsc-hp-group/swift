@@ -284,28 +284,71 @@ class MetadataBroker(DatabaseBroker):
         return json.dumps(obj_data) + "\n\n" + json.dumps(con_data) + "\n\n" + json.dumps(acc_data)
 
     def get_attributes_query(self, acc, con, obj, attrs):
-        if obj != "" and obj != None:  #only get stuff from this object
+        if attrsStartWith(attrs) == "BAD":
+            return "BAD"
+        if obj != "" and obj != None:  #only get stuff from this object\
+            Ouri = "'/" + acc + "/" +  con + "/" + obj + "'"
+            Curi = "'/" + acc + "/" +  con + "'"
+            Auri = "'/" + acc + "'"
             if 'all_object_attrs' in attrs.split(','):
-                return "SELECT * FROM object_metadata WHERE object_uri=%s" % ("'/" + acc + "/" +  con + "/" + obj + "'")
-            else:
-                return "SELECT %s FROM object_metadata WHERE object_uri=%s" % (attrs, "'/" + acc + "/" +  con + "/" + obj + "'")
+                return "SELECT * FROM object_metadata WHERE object_uri=%s" % Ouri
+            elif attrsStartWith(attrs) == 'object':
+                return "SELECT %s,object_uri FROM object_metadata WHERE object_uri=%s" % (attrs, Ouri)
+            elif attrsStartWith(attrs) == 'container':
+                return "SELECT %s,container_uri FROM container_metadata WHERE container_uri=%s" % (attrs, Curi)
+            elif attrsStartWith(attrs) == 'account':
+                return "SELECT %s,account_uri FROM account_metadata WHERE account_uri=%s" % (attrs, Auri)
         elif con != "" and con != None:  #only get stuff from this container
+            uri = "'/" + acc + "/" +  con + "'"
+            Auri = "'/" + acc + "'"
             if 'all_container_attrs' in attrs.split(','):
-                return "SELECT * FROM container_metadata WHERE container_uri=%s" % ("'/" + acc + "/" +  con + "'")
-            else:
-                return "SELECT %s FROM container_metadata WHERE container_uri=%s" % (attrs, "'/" + acc + "/" +  con + "'")
+                return "SELECT * FROM container_metadata WHERE container_uri=%s" % uri
+            elif attrsStartWith(attrs) == 'object':
+                return "SELECT %s,object_uri FROM object_metadata WHERE object_container_name=%s" % (attrs, "'"+con+"'")
+            elif attrsStartWith(attrs) == 'container':
+                return "SELECT %s,container_uri FROM container_metadata WHERE container_uri=%s" % (attrs, uri)
+            elif attrsStartWith(attrs) == 'account':
+                return "SELECT %s,account_uri FROM account_metadata WHERE account_uri=%s" % (attrs, Auri)
         elif acc != "" and acc != None:  #only get stuff from this account
-            if'all_account_attrs' in attrs.split(','):
-                return "SELECT * FROM account_metadata WHERE account_uri=%s" % ("'/" + acc + "'")
-            else:
-                return "SELECT %s FROM account_metadata WHERE account_uri=%s" % (attrs, "'/" + acc + "'")
+            uri = "'/" + acc + "'"
+            if 'all_account_attrs' in attrs.split(','):
+                return "SELECT * FROM account_metadata WHERE account_uri=%s" % uri
+            elif attrsStartWith(attrs) == 'object':
+                return "SELECT %s,object_uri FROM object_metadata WHERE object_account_name=%s AND object_container_name=%s" % (attrs, "'"+acc+"'", "'"+con+"'")
+            elif attrsStartWith(attrs) == 'container':
+                return "SELECT %s,container_uri FROM container_metadata WHERE container_account_name=%s" % (attrs, "'"+acc+"'")
+            elif attrsStartWith(attrs) == 'account':
+                return "SELECT %s,account_uri FROM account_metadata WHERE account_uri=%s" % (attrs, uri)
 
-    def execute_query(self, query, acc, con, obj):
+    def execute_query(self, query, acc, con, obj, includeURI):
         with self.get() as conn:
             conn.row_factory = dict_factory
             cur = conn.cursor()
             cur.execute(query)
-            return json.dumps(attachURI(cur.fetchall(), acc, con, obj))
+            queryList = cur.fetchall()
+            retList = []
+            for row in queryList:
+                if not includeURI:
+                    try:
+                        uri = row['object_uri']
+                        retList.append({uri: row})
+                        del row['object_uri']
+
+                    except KeyError:
+                        pass
+                    try:
+                        uri = row['container_uri']
+                        retList.append({uri: row})
+                        del row['container_uri']
+                    except KeyError:
+                        pass
+                    try:
+                        uri = row['account_uri']
+                        retList.append({uri: row})
+                        del row['account_uri']
+                    except KeyError:
+                        pass
+            return json.dumps(retList)
 
     def is_deleted(self, mdtable, timestamp=None):
         '''
@@ -329,13 +372,14 @@ class MetadataBroker(DatabaseBroker):
         #     return (row['object_count'] in (None, '', 0, '0')) and \
         #         (float(row['delete_timestamp']) > float(row['put_timestamp']))
 
+#converts query return into a dictionary
 def dict_factory(cursor, row):
     d = {}
     for idx, col in enumerate(cursor.description):
         d[col[0]] = row[idx]
     return d
 
-
+# Add URI to dict as `label`
 def attachURI(metaDict, acc, con, obj):
     if obj != "" and obj != None:
         uri = '/'.join(['',acc,con,obj])
@@ -344,3 +388,27 @@ def attachURI(metaDict, acc, con, obj):
     else:
         uri = '/' + acc
     return {uri: metaDict}
+
+#checks if every attribute in the list starts with the correct.
+#returns the thing it begins with (object/container/account)
+#or "BAD" if error
+def attrsStartWith(attrs):
+    objs = 0
+    cons = 0
+    accs = 0
+    for attr in attrs.split(','):
+        if attr.startswith('object'):
+            objs += 1
+        elif attr.startswith('container'):
+            cons += 1
+        elif attr.startswith('account'):
+            accs += 1
+
+    if objs > 0 and cons == 0 and accs == 0:
+        return 'object'
+    elif cons > 0 and objs == 0 and accs == 0:
+        return 'container'
+    elif accs > 0 and objs == 0 and cons == 0:
+        return 'account'
+    else:
+        return "BAD"

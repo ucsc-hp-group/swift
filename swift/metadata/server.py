@@ -98,88 +98,78 @@ class MetadataController(object):
         """
         Verify that attributes are valid
         """
-        if obj != "" and obj != None:
-            for attr in attrs.split(','):
-                if attr not in ['object_uri',
-                        'object_name',
-                        'object_account_name',
-                        'object_container_name',
-                        'object_location',
-                        'object_uri_create_time',
-                        'object_last_modified_time',
-                        'object_last_changed_time',
-                        'object_delete_time',
-                        'object_last_activity_time',
-                        'object_etag_hash',
-                        'object_content_type',
-                        'object_content_length',
-                        'object_content_encoding',
-                        'object_content_disposition',
-                        'object_content_language',
-                        'object_cache_control',
-                        'object_delete_at',
-                        'object_manifest_type',
-                        'object_manifest',
-                        'object_access_control_allow_origin',
-                        'object_access_control_allow_credentials',
-                        'object_access_control_expose_headers',
-                        'object_access_control_max_age',
-                        'object_access_control_allow_methods',
-                        'object_access_control_allow_headers',
-                        'object_origin',
-                        'object_access_control_request_method',
-                        'object_access_control_request_headers',
-                        'object_meta']:
-                    return False
-        elif con != "" and con != None:
-            for attr in attrs.split(','):
-                if attr not in ['container_uri',
-                        'container_name',
-                        'container_account_name',
-                        'container_create_time',
-                        'container_last_modified_time',
-                        'container_last_changed_time',
-                        'container_delete_time',
-                        'container_last_activity_time',
-                        'container_read_permissions',
-                        'container_write_permissions',
-                        'container_sync_to',
-                        'container_sync_key',
-                        'container_versions_location',
-                        'container_object_count',
-                        'container_bytes_used',
-                        'container_meta']:
-                    return False
-        elif acc != "" and acc != None:
-            for attr in attrs.split(','):
-                if attr not in ['account_uri',
-                        'account_name',
-                        'account_tenant_id',
-                        'account_first_use_time',
-                        'account_last_modified_time',
-                        'account_last_changed_time',
-                        'account_delete_time',
-                        'account_last_activity_time',
-                        'account_container_count',
-                        'account_object_count',
-                        'account_bytes_used',
-                        'account_meta']:
-                    return False
-        else:    
-            for attr in attrs.split(','):
-                if attr not in ['all_attrs', #TODO: maybe put these below
-                        'all_system_attrs', #and handle here
-                        'all_meta_attrs',
-                        'all_account_attrs'
-                        'all_account_system_attrs',
-                        'all_account_meta_attrs',
-                        'all_container_attrs',
-                        'all_container_system_attrs'
-                        'all_container_meta_attrs',
-                        'all_object_attrs',
-                        'all_object_system_attrs'
-                        'all_object_meta_attrs']:
-                    return False
+        for attr in attrs.split(','):
+            if attr not in ['object_uri',
+                    'object_name',
+                    'object_account_name',
+                    'object_container_name',
+                    'object_location',
+                    'object_uri_create_time',
+                    'object_last_modified_time',
+                    'object_last_changed_time',
+                    'object_delete_time',
+                    'object_last_activity_time',
+                    'object_etag_hash',
+                    'object_content_type',
+                    'object_content_length',
+                    'object_content_encoding',
+                    'object_content_disposition',
+                    'object_content_language',
+                    'object_cache_control',
+                    'object_delete_at',
+                    'object_manifest_type',
+                    'object_manifest',
+                    'object_access_control_allow_origin',
+                    'object_access_control_allow_credentials',
+                    'object_access_control_expose_headers',
+                    'object_access_control_max_age',
+                    'object_access_control_allow_methods',
+                    'object_access_control_allow_headers',
+                    'object_origin',
+                    'object_access_control_request_method',
+                    'object_access_control_request_headers',
+                    'object_meta',
+                    'container_uri',
+                    'container_name',
+                    'container_account_name',
+                    'container_create_time',
+                    'container_last_modified_time',
+                    'container_last_changed_time',
+                    'container_delete_time',
+                    'container_last_activity_time',
+                    'container_read_permissions',
+                    'container_write_permissions',
+                    'container_sync_to',
+                    'container_sync_key',
+                    'container_versions_location',
+                    'container_object_count',
+                    'container_bytes_used',
+                    'container_meta',
+                    'account_uri',
+                    'account_name',
+                    'account_tenant_id',
+                    'account_first_use_time',
+                    'account_last_modified_time',
+                    'account_last_changed_time',
+                    'account_delete_time',
+                    'account_last_activity_time',
+                    'account_container_count',
+                    'account_object_count',
+                    'account_bytes_used',
+                    'account_meta',
+                    'all_attrs', #TODO: maybe put these below
+                    'all_system_attrs', #and handle here
+                    'all_meta_attrs',
+                    'all_account_attrs'
+                    'all_account_system_attrs',
+                    'all_account_meta_attrs',
+                    'all_container_attrs',
+                    'all_container_system_attrs'
+                    'all_container_meta_attrs',
+                    'all_object_attrs',
+                    'all_object_system_attrs'
+                    'all_object_meta_attrs']:
+                return False
         return True
 
     @public
@@ -191,24 +181,43 @@ class MetadataController(object):
         base_version ,acc, con, obj = split_path(req.path, 1, 4, True)
         if 'attributes' in req.headers:
             attrs = req.headers['attributes']
-        elif obj != "" or obj != None:  #if there is no attributes lists, include everything in scope
-            attrs = "all_object_attrs"
+        # if there is no attributes lists, include everything in scope
+        # since no attributes passed in, there can be things from multiple levels of scope
+        # Things must come from multiple tables
+        # EX: Give me all metadata for `things` in account scope where timestamp < ~something~
+        elif obj != "" or obj != None:
+            attrs = "object_uri, container_uri, account_uri"
         elif con != "" and con != None:
-            attrs = "all_container_attrs" 
+            attrs = "container_uri, account_uri"
         elif acc != "" and acc != None:
-            attrs = "all_account_attrs"
-        else: 
-            attrs = "all_attrs"
+            attrs = "account_uri"
+        else:
+            attrs = "object_uri, container_uri, account_uri"
 
-        
         if "all_attrs" in attrs.split(','):
             ret = broker.getAll()
+            status = 200
         elif self.check_attrs(attrs, acc, con, obj):
-            query = broker.get_attributes_query(acc,con,obj,attrs)
-            ret = broker.execute_query(query, acc, con, obj)
+            accAttrs, conAttrs, objAttrs, superAttrs = split_attrs_by_scope(attrs)
+
+            accQuery = broker.get_attributes_query(acc,con,obj,accAttrs)
+            conQuery = broker.get_attributes_query(acc,con,obj,conAttrs)
+            objQuery = broker.get_attributes_query(acc,con,obj,objAttrs)
+
+            ret = ""
+            if accQuery != "BAD":
+                ret += broker.execute_query(accQuery, acc, con, obj, 'account_uri' in attrs.split(',') ) + "\n"
+            if conQuery != "BAD":
+                ret += broker.execute_query(conQuery, acc, con, obj, 'container_uri' in attrs.split(',') ) + "\n"
+            if objQuery != "BAD":
+                ret += broker.execute_query(objQuery, acc, con, obj, 'object_uri' in attrs.split(',') ) + "\n"
+            
+            status = 200
+            
         else:
             ret = json.dumps(attrs) + str(acc) + " " + str(con) + " " + str(obj)
-        return Response(request=req, body=ret + "\n", content_type="json")
+            status = 400
+        return Response(request=req, body=ret + "\n", content_type="json", status=status)
 
     @public
     @timing_stats()
@@ -322,6 +331,22 @@ class MetadataController(object):
         #         self.logger.info(log_message)
         return res(env, start_response)
 
+def split_attrs_by_scope(attrs):
+    acc_star = []
+    con_star = []
+    obj_star = []
+    all_star = []
+    for attr in attrs.split(','):
+        if attr != "" or attr != None:
+            if attr.startswith('object'):
+                obj_star.append(attr)
+            elif attr.startswith('container'):
+                con_star.append(attr)
+            elif attr.startswith('account'):
+                acc_star.append(attr)
+            elif attr.startswith('all'):
+                all_star.append(attr)
+    return ",".join(acc_star), ",".join(con_star), ",".join(obj_star), ",".join(all_star)
 
 def app_factory(global_conf, **local_conf):
     """paste.deploy app factory for creating WSGI container server apps"""
