@@ -204,16 +204,16 @@ class MetadataController(object):
             conQuery = broker.get_attributes_query(acc,con,obj,conAttrs)
             objQuery = broker.get_attributes_query(acc,con,obj,objAttrs)
 
-            ret = ""
+            ret = []
             if accQuery != "BAD":
-                ret += broker.execute_query(accQuery, acc, con, obj, 'account_uri' in attrs.split(',') ) + "\n"
+                ret.extend(broker.execute_query(accQuery, acc, con, obj, 'account_uri' in attrs.split(',') ))
             if conQuery != "BAD":
-                ret += broker.execute_query(conQuery, acc, con, obj, 'container_uri' in attrs.split(',') ) + "\n"
+                ret.extend(broker.execute_query(conQuery, acc, con, obj, 'container_uri' in attrs.split(',') ))
             if objQuery != "BAD":
-                ret += broker.execute_query(objQuery, acc, con, obj, 'object_uri' in attrs.split(',') ) + "\n"
-            
+                ret.extend(broker.execute_query(objQuery, acc, con, obj, 'object_uri' in attrs.split(',') ))
+            ret = json.dumps(ret)
             status = 200
-            
+
         else:
             ret = json.dumps(attrs) + str(acc) + " " + str(con) + " " + str(obj)
             status = 400

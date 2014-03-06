@@ -348,7 +348,20 @@ class MetadataBroker(DatabaseBroker):
                         del row['account_uri']
                     except KeyError:
                         pass
-            return json.dumps(retList)
+                else:
+                    try:
+                        retList.append({row['object_uri'] : row})
+                    except KeyError:
+                        pass
+                    try:
+                        retList.append({row['container_uri'] : row})
+                    except KeyError:
+                        pass
+                    try:
+                        retList.append({row['account_uri'] : row})
+                    except KeyError:
+                        pass
+            return retList
 
     def is_deleted(self, mdtable, timestamp=None):
         '''
