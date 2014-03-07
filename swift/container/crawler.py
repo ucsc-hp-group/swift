@@ -19,6 +19,7 @@ from swift.container import server as container_server
 from swift.container.backend import ContainerBroker
 from swift.common.utils import get_logger, audit_location_generator, \
     config_true_value, json
+from swift.common.request_helpers import is_sys_or_user_meta
 from swift.common.daemon import Daemon
 from eventlet import Timeout
 from swift.common.SendData import Sender
@@ -88,6 +89,10 @@ class ContainerCrawler(Daemon):
                 #if normalize_timestamp(self.crawled_time)
                 #< reportedTime < normalize_timestamp(start_time):
                 metaDict = broker.get_info()
+                metaDict.update(
+                    (key, value)
+                    for key, (value, timestamp) in broker.metadata.iteritems()
+                    if value != '' and is_sys_or_user_meta('container', key))
         except (Exception, Timeout):
             self.logger.increment('failures')
         return metaDict
@@ -111,5 +116,9 @@ def format_metadata (data):
     metadata['container_object_count']  ='NULL'
     metadata['container_bytes_used']  ='NULL'
     metadata['container_delete_at'] ='NULL'
-    metadata['container_meta'] = '{}'
+    for custom in data:
+        if(custom.startswith("X-Container-Meta")):
+            sanitized_custom = custom[2:16].lower() + custom[16:]
+            sanitized_custom = sanitized_custom.replace('-','_')
+            metadata[sanitized_custom] = data[custom]
     return metadata

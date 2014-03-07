@@ -101,5 +101,9 @@ def format_metadata (data):
     metadata['account_container_count'] = 'NULL'
     metadata['account_object_count'] = 'NULL'
     metadata['account_bytes_used'] = 'NULL'
-    metadata['account_meta'] = '{}'
+    for custom in data:
+        if(custom.startswith("X-Account-Meta")):
+            sanitized_custom = custom[2:14].lower() + custom[14:]
+            sanitized_custom = sanitized_custom.replace('-','_')
+            metadata[sanitized_custom] = data[custom]
     return metadata
