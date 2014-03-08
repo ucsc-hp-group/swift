@@ -16,4 +16,8 @@ class TestMetadataBroker(unitetest.TestCase):
 
     def test_empty(self):
 
+    def test_query_with_attrs(self):
+
+    def test_query_with_attrs_and_md_queries(self):
+
     '''

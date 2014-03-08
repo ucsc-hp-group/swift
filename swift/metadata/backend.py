@@ -1,5 +1,5 @@
 
-import os, time, errno, sqlite3
+import os, time, re, errno, sqlite3
 from uuid import uuid4
 from swift.common.utils import normalize_timestamp, lock_parent_directory
 from swift.common.db import DatabaseBroker, DatabaseConnectionError, \
@@ -9,6 +9,9 @@ import cPickle as pickle
 
 from swift.metadata.utils import build_insert_sql
 from swift.common.utils import json
+
+from utils import get_account_md_schema, get_container_md_schema, \
+    get_object_md_schema, cross_reference_md_schema
 
 # Interface with metadata database
 class MetadataBroker(DatabaseBroker):
@@ -281,44 +284,151 @@ class MetadataBroker(DatabaseBroker):
             con_data = cur.fetchall()
             cur.execute("SELECT * FROM account_metadata")
             acc_data = cur.fetchall()
-        return json.dumps(obj_data) + "\n\n" + json.dumps(con_data) + "\n\n" + json.dumps(acc_data)
 
+        return ''.join([
+            json.dumps(obj_data), "\n\n", json.dumps(con_data), "\n\n",
+            json.dumps(acc_data) 
+        ])
+
+    # URI Attributes Parser
     def get_attributes_query(self, acc, con, obj, attrs):
+        
+        # Catch bad query
         if attrsStartWith(attrs) == "BAD":
             return "BAD"
-        if obj != "" and obj != None:  #only get stuff from this object\
+
+        # Get information from the current object
+        if obj != "" and obj != None:
             Ouri = "'/" + acc + "/" +  con + "/" + obj + "'"
             Curi = "'/" + acc + "/" +  con + "'"
             Auri = "'/" + acc + "'"
+
             if 'all_object_attrs' in attrs.split(','):
-                return "SELECT * FROM object_metadata WHERE object_uri=%s" % Ouri
+                return """
+                    SELECT * 
+                    FROM object_metadata 
+                    WHERE object_uri=%s
+                """ % Ouri
+
             elif attrsStartWith(attrs) == 'object':
-                return "SELECT %s,object_uri FROM object_metadata WHERE object_uri=%s" % (attrs, Ouri)
+                return """
+                    SELECT %s,object_uri 
+                    FROM object_metadata 
+                    WHERE object_uri=%s
+                """ % (attrs, Ouri)
+
             elif attrsStartWith(attrs) == 'container':
-                return "SELECT %s,container_uri FROM container_metadata WHERE container_uri=%s" % (attrs, Curi)
+                return """
+                    SELECT %s,container_uri 
+                    FROM container_metadata 
+                    WHERE container_uri=%s
+                """ % (attrs, Curi)
+
             elif attrsStartWith(attrs) == 'account':
-                return "SELECT %s,account_uri FROM account_metadata WHERE account_uri=%s" % (attrs, Auri)
-        elif con != "" and con != None:  #only get stuff from this container
+                return """
+                    SELECT %s,account_uri 
+                    FROM account_metadata 
+                    WHERE account_uri=%s
+                """ % (attrs, Auri)
+
+        # Get information from the current container
+        elif con != "" and con != None: 
             uri = "'/" + acc + "/" +  con + "'"
             Auri = "'/" + acc + "'"
             if 'all_container_attrs' in attrs.split(','):
-                return "SELECT * FROM container_metadata WHERE container_uri=%s" % uri
+                return """
+                    SELECT * 
+                    FROM container_metadata 
+                    WHERE container_uri=%s
+                """ % uri
+
             elif attrsStartWith(attrs) == 'object':
-                return "SELECT %s,object_uri FROM object_metadata WHERE object_container_name=%s" % (attrs, "'"+con+"'")
+                return """
+                    SELECT %s,object_uri 
+                    FROM object_metadata 
+                    WHERE object_container_name=%s
+                """ % (attrs, "'"+con+"'")
+
             elif attrsStartWith(attrs) == 'container':
-                return "SELECT %s,container_uri FROM container_metadata WHERE container_uri=%s" % (attrs, uri)
+                return """
+                    SELECT %s,container_uri 
+                    FROM container_metadata 
+                    WHERE container_uri=%s
+                """ % (attrs, uri)
+
             elif attrsStartWith(attrs) == 'account':
-                return "SELECT %s,account_uri FROM account_metadata WHERE account_uri=%s" % (attrs, Auri)
-        elif acc != "" and acc != None:  #only get stuff from this account
+                return """
+                    SELECT %s,account_uri 
+                    FROM account_metadata 
+                    WHERE account_uri=%s
+                """ % (attrs, Auri)
+
+        # Get information from the current account
+        elif acc != "" and acc != None:
             uri = "'/" + acc + "'"
             if 'all_account_attrs' in attrs.split(','):
-                return "SELECT * FROM account_metadata WHERE account_uri=%s" % uri
+                return """
+                    SELECT * 
+                    FROM account_metadata 
+                    WHERE account_uri=%s
+                """ % uri
+
             elif attrsStartWith(attrs) == 'object':
-                return "SELECT %s,object_uri FROM object_metadata WHERE object_account_name=%s AND object_container_name=%s" % (attrs, "'"+acc+"'", "'"+con+"'")
+                return """
+                    SELECT %s,object_uri 
+                    FROM object_metadata 
+                    WHERE object_account_name=%s 
+                    AND object_container_name=%s
+                """ % (attrs, "'"+acc+"'", "'"+con+"'")
+
             elif attrsStartWith(attrs) == 'container':
-                return "SELECT %s,container_uri FROM container_metadata WHERE container_account_name=%s" % (attrs, "'"+acc+"'")
+                return """
+                    SELECT %s,container_uri 
+                    FROM container_metadata 
+                    WHERE container_account_name=%s
+                """ % (attrs, "'"+acc+"'")
+
             elif attrsStartWith(attrs) == 'account':
-                return "SELECT %s,account_uri FROM account_metadata WHERE account_uri=%s" % (attrs, uri)
+                return """
+                    SELECT %s,account_uri 
+                    FROM account_metadata 
+                    WHERE account_uri=%s
+                """ % (attrs, uri)
+
+    # URI Query parser
+    def get_uri_query(self, sql, queries):
+        '''
+        Takes the output of get_attributes_query() as input (sql), and adds
+        additional query information based on ?query=<> from the URI 
+        '''
+        
+        table = re.sub(r' ','',re.split(r'WHERE',re.split(r'FROM',sql)[1])[0])
+
+        # Normalize ANDs, and split query string by that pattern
+        tmp_queries = re.sub(r"[aA][nN][dD]", "AND", queries)
+        query_list  = re.split(r"AND", tmp_queries)
+        clauses     = []
+
+        # Build clause list
+        for query in query_list:
+            if cross_reference_md_schema(query, table):
+                clauses.append(query)
+            else:
+                clauses.append(None)
+
+        # Ensure the query list is valid
+        if None in clauses:
+            # TODO: raise hackles
+
+        # Return subqueries appended to given query
+        return sql + ''.join([
+                ' AND ' + clause
+            if index > 0
+            else
+                clause
+            for index, clause in enumerate(clauses)
+        ])
+
 
     def execute_query(self, query, acc, con, obj, includeURI):
         with self.get() as conn:

@@ -158,3 +158,85 @@ def build_insert_sql(schema):
         for i, col in enumerate(schema['columns'])
     ])
     return query % (schema['table'], qcols, qtypes, qupdates)
+
+# Utilities to provide the valid columns of each table
+def get_account_md_schema():
+    return {
+        'account_uri': 'TEXT PRIMARY KEY',
+        'account_name': 'TEXT',
+        'account_tenant_id': 'TEXT',
+        'account_first_use_time': 'TEXT',
+        'account_last_modified_time': 'TEXT',
+        'account_last_changed_time': 'TEXT',
+        'account_delete_time: TEXT',
+        'account_last_activity_time': 'TEXT',
+        'account_container_count': 'INTEGER',
+        'account_object_count': 'INTEGER',
+        'account_bytes_used': 'INTEGER',
+        'account_meta': 'TEXT'
+    }
+
+def get_container_md_schema():
+    return {
+        'container_uri': 'TEXT PRIMARY KEY',
+        'container_name': 'TEXT',
+        'container_account_name': 'TEXT',
+        'container_create_time': 'TEXT',
+        'container_last_modified_time': 'TEXT',
+        'container_last_changed_time': 'TEXT',
+        'container_delete_time': 'TEXT',
+        'container_last_activity_time': 'TEXT',
+        'container_read_permissions': 'TEXT',
+        'container_write_permissions': 'TEXT',
+        'container_sync_to': 'TEXT',
+        'container_sync_key': 'TEXT',
+        'container_versions_location': 'TEXT',
+        'container_object_count': 'INTEGER',
+        'container_bytes_used': 'INTEGER',
+        'container_meta': 'TEXT'
+    }
+
+def get_object_md_schema():
+    return {
+        'object_uri' : 'TEXT PRIMARY KEY',
+        'object_name': 'TEXT',
+        'object_account_name': 'TEXT',
+        'object_container_name': 'TEXT',
+        'object_location': 'TEXT',
+        'object_uri_create_time': 'TEXT',
+        'object_last_modified_time': 'TEXT',
+        'object_last_changed_time': 'TEXT',
+        'object_delete_time': 'TEXT',
+        'object_last_activity_time': 'TEXT',
+        'object_etag_hash': 'TEXT',
+        'object_content_type': 'TEXT',
+        'object_content_length': 'INTEGER',
+        'object_content_encoding': 'TEXT',
+        'object_content_disposition': 'TEXT',
+        'object_content_language': 'TEXT',
+        'object_cache_control': 'TEXT',
+        'object_delete_at': 'TEXT',
+        'object_manifest_type': 'INTEGER',
+        'object_manifest': 'TEXT',
+        'object_access_control_allow_origin': 'TEXT',
+        'object_access_control_allow_credentials': 'TEXT',
+        'object_access_control_expose_headers': 'TEXT',
+        'object_access_control_max_age': 'TEXT',
+        'object_access_control_allow_methods': 'TEXT',
+        'object_access_control_allow_headers': 'TEXT',
+        'object_origin': 'TEXT',
+        'object_access_control_request_method': 'TEXT',
+        'object_access_control_request_headers': 'TEXT',
+        'object_meta': 'TEXT'
+    }
+
+# check for a column name inside some schema dict
+def cross_reference_md_schema(query, table):
+    if table == 'object_metadata' and query in get_object_md_schema():
+        return True
+    elif table == 'container_metadata' and query in get_container_md_schema():
+        return True
+    elif table == 'account_metadata' and query in get_account_md_schema():
+        return True
+    else:
+        return False
