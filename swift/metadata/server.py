@@ -99,7 +99,11 @@ class MetadataController(object):
         Verify that attributes are valid
         """
         for attr in attrs.split(','):
-            if attr not in ['object_uri',
+            if attr.startswith('object_meta') or \
+                    attr.startswith('container_meta') or \
+                    attr.startswith('account_meta'):
+                pass
+            elif attr not in ['object_uri',
                     'object_name',
                     'object_account_name',
                     'object_container_name',
@@ -198,11 +202,13 @@ class MetadataController(object):
             ret = broker.getAll()
             status = 200
         elif self.check_attrs(attrs, acc, con, obj):
-            accAttrs, conAttrs, objAttrs, superAttrs = split_attrs_by_scope(attrs)
+            accAttrs, conAttrs, objAttrs, superAttrs, customAttrs = \
+                split_attrs_by_scope(attrs)
 
             accQuery = broker.get_attributes_query(acc,con,obj,accAttrs)
             conQuery = broker.get_attributes_query(acc,con,obj,conAttrs)
             objQuery = broker.get_attributes_query(acc,con,obj,objAttrs)
+            customAttrs = broker.get_custom_attributes_query(customAttrs)
 
             ret = []
             if accQuery != "BAD":
@@ -336,9 +342,14 @@ def split_attrs_by_scope(attrs):
     con_star = []
     obj_star = []
     all_star = []
+    custom_star = []
     for attr in attrs.split(','):
         if attr != "" or attr != None:
-            if attr.startswith('object'):
+            if attr.startswith('object_meta') or \
+                    attr.startswith('container_meta') or \
+                    attr.startswith('account_meta'):
+                custom_star.append(attr)
+            elif attr.startswith('object'):
                 obj_star.append(attr)
             elif attr.startswith('container'):
                 con_star.append(attr)
@@ -346,7 +357,8 @@ def split_attrs_by_scope(attrs):
                 acc_star.append(attr)
             elif attr.startswith('all'):
                 all_star.append(attr)
-    return ",".join(acc_star), ",".join(con_star), ",".join(obj_star), ",".join(all_star)
+    return (",".join(acc_star), ",".join(con_star), ",".join(obj_star),
+        ",".join(all_star), ",".join(custom_star))
 
 def app_factory(global_conf, **local_conf):
     """paste.deploy app factory for creating WSGI container server apps"""

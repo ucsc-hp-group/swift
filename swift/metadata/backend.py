@@ -346,6 +346,9 @@ class MetadataBroker(DatabaseBroker):
             elif attrsStartWith(attrs) == 'account':
                 return "SELECT %s,account_uri FROM account_metadata WHERE account_uri=%s" % (attrs, uri)
 
+    def get_custom_attributes_query(self, customAttrs):
+        return ""
+
     def execute_query(self, query, acc, con, obj, includeURI):
         with self.get() as conn:
             conn.row_factory = dict_factory
