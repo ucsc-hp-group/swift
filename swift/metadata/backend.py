@@ -142,7 +142,7 @@ class MetadataBroker(DatabaseBroker):
                     account_object_count,
                     account_bytes_used
                 )
-                VALUES ("%s","%s",%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES ("%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s")
                 ;
             '''
             # Build and execute query for each requested insertion
@@ -188,8 +188,8 @@ class MetadataBroker(DatabaseBroker):
                     container_bytes_used
                 )
                 VALUES (
-                    "%s", "%s", "%s", %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s
+                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s"
                 )
                 ;
             '''
@@ -252,9 +252,9 @@ class MetadataBroker(DatabaseBroker):
                     object_access_control_request_method,
                     object_access_control_request_headers
                 ) VALUES (
-                    "%s", "%s", "%s", "%s", %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
-                    %s, %s, %s 
+                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s" 
                 )
                 ;
             '''
