@@ -46,8 +46,6 @@ class AccountCrawler(Daemon):
             metaDict = self.account_crawl(path)
             if metaDict != {}:
                 metaList.append(format_metadata(metaDict))
-        with open("/opt/stack/data/swift/logs/acc-crawler.log", "a+") as f:
-            f.write(json.dumps(metaList))
         AccountSender = Sender(self.conf)
         AccountSender.sendData(metaList, 'account_crawler' , self.ip, self.port)
 
@@ -92,14 +90,20 @@ def format_metadata (data):
     uri = "/" + data['account']
     metadata['account_uri'] = uri
     metadata['account_name'] = data['account']
-    metadata['account_tenant_id'] = 'NULL'
-    metadata['account_first_use_time'] = 'NULL'
-    metadata['account_last_modified_time'] = 'NULL'
-    metadata['account_last_changed_time'] = 'NULL'
-    metadata['account_delete_time']  = 'NULL'
-    metadata['account_last_activity_time']  = 'NULL'
-    metadata['account_container_count'] = 'NULL'
-    metadata['account_object_count'] = 'NULL'
-    metadata['account_bytes_used'] = 'NULL'
-    metadata['account_meta'] = '{}'
+    metadata['account_tenant_id'] = data.setdefault('id','NULL')
+    metadata['account_first_use_time'] = data.setdefault('created_at','NULL')
+    metadata['account_last_modified_time'] = data.setdefault('put_timestamp','NULL')
+    metadata['account_last_changed_time'] = data.setdefault('put_timestamp','NULL')
+    metadata['account_delete_time']  = data.setdefault('delete_timestamp','NULL')
+    metadata['account_last_activity_time']  = data.setdefault('put_timestamp','NULL')
+    metadata['account_container_count'] = data.setdefault('container_count','NULL')
+    metadata['account_object_count'] = data.setdefault('object_count','NULL')
+    metadata['account_bytes_used'] = data.setdefault('bytes_used','NULL')
+
+    #Insert all Account custom metadata
+    for custom in data:
+        if(custom.startswith("X-Account-Meta")):
+            sanitized_custom = custom[2:14].lower() + custom[14:]
+            sanitized_custom = sanitized_custom.replace('-','_')
+            metadata[sanitized_custom] = data[custom]
     return metadata

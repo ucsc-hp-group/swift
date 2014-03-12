@@ -41,3 +41,12 @@ class TestMetaDataController(unittest.TestCase):
     '''
     POST request tests
     '''
+
+
+
+    def test_PUT_GET_metadata(self):
+        req = Request.blank(
+            '', environ={'REQUEST_METHOD': 'PUT',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'user-agent': 'object_crawler'},
+            body=json.dumps({''}))
+        req.get_response(self.controller)

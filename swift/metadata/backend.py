@@ -26,6 +26,7 @@ class MetadataBroker(DatabaseBroker):
         self.create_account_md_table(conn)
         self.create_container_md_table(conn)
         self.create_object_md_table(conn)
+        self.create_custom_md_table(conn)
 
     def create_account_md_table(self, conn):
         conn.executescript("""
@@ -40,8 +41,7 @@ class MetadataBroker(DatabaseBroker):
                 account_last_activity_time TEXT DEFAULT '0',
                 account_container_count INTEGER,
                 account_object_count INTEGER,
-                account_bytes_used INTEGER,
-                account_meta TEXT
+                account_bytes_used INTEGER
             );
         """)
 
@@ -62,8 +62,7 @@ class MetadataBroker(DatabaseBroker):
                 container_sync_key TEXT,
                 container_versions_location TEXT,
                 container_object_count INTEGER,
-                container_bytes_used INTEGER,
-                container_meta TEXT
+                container_bytes_used INTEGER
             );
         """)
 
@@ -98,10 +97,36 @@ class MetadataBroker(DatabaseBroker):
                 object_access_control_allow_headers TEXT,
                 object_origin TEXT,
                 object_access_control_request_method TEXT,
-                object_access_control_request_headers TEXT,
-                object_meta TEXT
+                object_access_control_request_headers TEXT
             );
         """)
+
+    def create_custom_md_table(self, conn):
+        conn.executescript("""
+            CREATE TABLE custom_metadata (
+                uri TEXT NOT NULL,
+                custom_key TEXT NOT NULL,
+                custom_value TEXT,
+                timestamp TEXT,
+                PRIMARY KEY (uri, custom_key)
+            );
+        """)
+
+    def insert_custom_md(self, conn, uri, key, value):
+        query = '''
+            INSERT OR REPLACE INTO custom_metadata (
+                uri,
+                custom_key,
+                custom_value,
+                timestamp
+            )
+            VALUES ("%s","%s","%s","%s")
+            ;
+        '''
+
+        # Build and execute query for each requested insertion
+        formatted_query = query % (uri, key, value, normalize_timestamp(time.time()))
+        conn.execute(formatted_query)
 
     # Data insertion methods
     def insert_account_md(self, data):
@@ -118,10 +143,9 @@ class MetadataBroker(DatabaseBroker):
                     account_last_activity_time,
                     account_container_count,
                     account_object_count,
-                    account_bytes_used,
-                    account_meta
+                    account_bytes_used
                 )
-                VALUES ("%s","%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,"%s")
+                VALUES ("%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s")
                 ;
             '''
             # Build and execute query for each requested insertion
@@ -138,9 +162,11 @@ class MetadataBroker(DatabaseBroker):
                     item['account_last_activity_time'],
                     item['account_container_count'],
                     item['account_object_count'],
-                    item['account_bytes_used'],
-                    item['account_meta']
+                    item['account_bytes_used']
                 )
+                for custom in item:
+                    if(custom.startswith("account_meta")):
+                        self.insert_custom_md(conn, item['account_uri'],custom,item[custom])
                 conn.execute(formatted_query)
             conn.commit()
 
@@ -162,12 +188,11 @@ class MetadataBroker(DatabaseBroker):
                     container_sync_key,
                     container_versions_location,
                     container_object_count,
-                    container_bytes_used,
-                    container_meta
+                    container_bytes_used
                 )
                 VALUES (
-                    "%s", "%s", "%s", %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, "%s" 
+                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s"
                 )
                 ;
             '''
@@ -188,11 +213,11 @@ class MetadataBroker(DatabaseBroker):
                     item['container_sync_key'],
                     item['container_versions_location'],
                     item['container_object_count'],
-                    item['container_bytes_used'],
-                    item['container_meta']
+                    item['container_bytes_used']
                 )
-                with open("/opt/stack/data/swift/logs/delete.log", "w") as f:
-                    f.write(formatted_query)
+                for custom in item:
+                    if(custom.startswith("container_meta")):
+                        self.insert_custom_md(conn, item['container_uri'],custom,item[custom])
                 conn.execute(formatted_query)
             conn.commit()
 
@@ -228,12 +253,11 @@ class MetadataBroker(DatabaseBroker):
                     object_access_control_allow_headers,
                     object_origin,
                     object_access_control_request_method,
-                    object_access_control_request_headers,
-                    object_meta
+                    object_access_control_request_headers
                 ) VALUES (
-                    "%s", "%s", "%s", "%s", %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
-                    %s, %s, %s, "%s" 
+                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s" 
                 )
                 ;
             '''
@@ -268,9 +292,11 @@ class MetadataBroker(DatabaseBroker):
                     item['object_access_control_allow_headers'],
                     item['object_origin'],
                     item['object_access_control_request_method'],
-                    item['object_access_control_request_headers'],
-                    item['object_meta']
+                    item['object_access_control_request_headers']
                 )
+                for custom in item:
+                    if(custom.startswith("object_meta")):
+                        self.insert_custom_md(conn, item['object_uri'],custom,item[custom])
                 conn.execute(formatted_query)
             conn.commit()
 
@@ -430,6 +456,9 @@ class MetadataBroker(DatabaseBroker):
         ])
 
 
+    def get_custom_attributes_query(self, customAttrs):
+        return ""
+
     def execute_query(self, query, acc, con, obj, includeURI):
         with self.get() as conn:
             conn.row_factory = dict_factory
@@ -443,7 +472,6 @@ class MetadataBroker(DatabaseBroker):
                         uri = row['object_uri']
                         retList.append({uri: row})
                         del row['object_uri']
-
                     except KeyError:
                         pass
                     try:

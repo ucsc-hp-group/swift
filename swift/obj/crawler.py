@@ -71,8 +71,6 @@ class ObjectCrawler(Daemon):
                 metaList.append(format_metadata(metaDict))
         ObjectSender = Sender(self.conf)
         resp = ObjectSender.sendData(metaList, 'object_crawler' , self.ip, self.port)
-        with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
-            f.write(resp.read())
 
 
     def collect_object(self, location):
@@ -95,36 +93,38 @@ def format_metadata (data):
     metadata['object_name'] = ("/".join(uri[3:]))
     metadata['object_account_name'] = uri[1]
     metadata['object_container_name'] = uri[2]
-    metadata['object_location'] = data.setDefault('object_location','NULL')
-    metadata['object_uri_create_time'] = data.setDefault('object_uri_create_time','NULL')
-    metadata['object_last_modified_time'] = data.setDefault('object_last_modified_time','NULL')
-    metadata['object_last_changed_time'] = data.setDefault('object_last_changed_time','NULL')
-    metadata['object_delete_time'] = data.setDefault('delete_time','NULL')
-    metadata['object_last_activity_time'] = data.setDefault('Last_activity_time','NULL')
-    metadata['object_etag_hash'] = data.setDefault('Etag','NULL')
-    metadata['object_content_type'] = data.setDefault('Vontent-Type','NULL')
-    metadata['object_content_length'] = data.setDefault('Content-Length','NULL')
-    metadata['object_content_encoding'] = data.setDefault('Content-Encoding','NULL')
-    metadata['object_content_disposition'] = data.setDefault('object_content_disposition','NULL')
-    metadata['object_content_language'] = data.setDefault('content_language','NULL')
-    metadata['object_cache_control'] = data.setDefault('cache_control','NULL')
-    metadata['object_delete_at'] = data.setDefault('delete_at','NULL')
-    metadata['object_manifest_type'] = data.setDefault('manifest_type','NULL')
-    metadata['object_manifest'] = data.setDefault('manifest_type','0')
-    metadata['object_access_control_allow_origin'] = data.setDefault('access_control_allow_origin','NULL')
-    metadata['object_access_control_allow_credentials'] = data.setDefault('access_control_allow_credentials','NULL')
-    metadata['object_access_control_expose_headers'] = data.setDefault('access_control_expose_headers','NULL')
-    metadata['object_access_control_max_age'] = data.setDefault('access_control_max_age','NULL')
-    metadata['object_access_control_allow_methods'] = data.setDefault('access_control_allow_methods','NULL')
-    metadata['object_access_control_allow_headers'] = data.setDefault('access_control_allow_headers','NULL')
-    metadata['object_origin'] = data.setDefault('origin','NULL')
-    metadata['object_access_control_request_method'] = data.setDefault('access_control_request_method','NULL')
-    metadata['object_access_control_request_headers'] = data.setDefault('access_control_request_headers','NULL')
+    metadata['object_location'] = 'NULL' #Not implemented yet
+    metadata['object_uri_create_time'] = data.setdefault('X-Timestamp','NULL')
+    #Uri create needs to be implemented on meta server.
+    metadata['object_last_modified_time'] = data.setdefault('X-Timestamp','NULL')
+    metadata['object_last_changed_time'] = data.setdefault('X-Timestamp','NULL')
+    metadata['object_delete_time'] = data.setdefault('delete_timestamp','NULL')
+    metadata['object_last_activity_time'] = data.setdefault('X-Timestamp','NULL')
+    metadata['object_etag_hash'] = data.setdefault('ETag','NULL')
+    metadata['object_content_type'] = data.setdefault('Content-Type','NULL')
+    metadata['object_content_length'] = data.setdefault('Content-Length','NULL')
+    metadata['object_content_encoding'] = data.setdefault('Content-Encoding','NULL')
+    metadata['object_content_disposition'] = data.setdefault('Content-Disposition','NULL')
+    metadata['object_content_language'] = data.setdefault('Content-Langauge','NULL')
+    metadata['object_cache_control'] = 'NULL' #Not Implemented yet
+    metadata['object_delete_at'] = 'NULL' #Not Implemented yet
+    metadata['object_manifest_type'] = 'NULL'  #Not Implemented yet
+    metadata['object_manifest'] = 'NULL'  #Not Implemented yet
+    metadata['object_access_control_allow_origin'] = 'NULL'  #Not Implemented yet
+    metadata['object_access_control_allow_credentials'] = 'NULL' #Not Implemented yet
+    metadata['object_access_control_expose_headers'] = 'NULL' #Not Implemented yet
+    metadata['object_access_control_max_age'] = 'NULL' #Not Implemented yet
+    metadata['object_access_control_allow_methods'] = 'NULL' #Not Implemented yet
+    metadata['object_access_control_allow_headers'] = 'NULL' #Not Implemented yet
+    metadata['object_origin'] = 'NULL' #Not Implemented yet
+    metadata['object_access_control_request_method'] = 'NULL' #Not Implemented yet
+    metadata['object_access_control_request_headers'] = 'NULL' #Not Implemented yet
 
-    metajson = {}
-    for meta in data:
-        if(meta.startswith("X-object_meta")):
-            metajson[meta] = data[meta]
-    metadata['object_meta'] = json.dump(metajson)
+    #Insert all Object custom metadata
+    for custom in data:
+       if(custom.startswith("X-Object-Meta")):
+            sanitized_custom = custom[2:13].lower() + custom[13:]
+            sanitized_custom = sanitized_custom.replace('-','_')
+            metadata[sanitized_custom] = data[custom]
 
     return metadata

@@ -19,6 +19,7 @@ from swift.container import server as container_server
 from swift.container.backend import ContainerBroker
 from swift.common.utils import get_logger, audit_location_generator, \
     config_true_value, json
+from swift.common.request_helpers import is_sys_or_user_meta
 from swift.common.daemon import Daemon
 from eventlet import Timeout
 from swift.common.SendData import Sender
@@ -50,8 +51,6 @@ class ContainerCrawler(Daemon):
             metaDict = self.container_crawl(path)
             if metaDict != {}:
                 metaList.append(format_metadata(metaDict))
-        with open("/opt/stack/data/swift/logs/con-crawler.log", "a+") as f:
-            f.write(json.dumps(metaList))
         ContainerSender = Sender(self.conf)
         ContainerSender.sendData(metaList, 'container_crawler' , self.ip, self.port)
 
@@ -88,6 +87,10 @@ class ContainerCrawler(Daemon):
                 #if normalize_timestamp(self.crawled_time)
                 #< reportedTime < normalize_timestamp(start_time):
                 metaDict = broker.get_info()
+                metaDict.update(
+                    (key, value)
+                    for key, (value, timestamp) in broker.metadata.iteritems()
+                    if value != '' and is_sys_or_user_meta('container', key))
         except (Exception, Timeout):
             self.logger.increment('failures')
         return metaDict
@@ -98,18 +101,25 @@ def format_metadata (data):
     metadata['container_uri'] = uri
     metadata['container_name'] = data['container']
     metadata['container_account_name'] = data['account']
-    metadata['container_create_time'] ='NULL'
-    metadata['container_last_modified_time'] = 'NULL'
-    metadata['container_last_changed_time'] = 'NULL'
-    metadata['container_delete_time'] ='NULL'
-    metadata['container_last_activity_time']  ='NULL'
-    metadata['container_read_permissions'] ='NULL'
-    metadata['container_write_permissions'] ='NULL'
-    metadata['container_sync_to']  ='NULL'
-    metadata['container_sync_key'] ='NULL'
-    metadata['container_versions_location']  ='NULL'
-    metadata['container_object_count']  ='NULL'
-    metadata['container_bytes_used']  ='NULL'
-    metadata['container_delete_at'] ='NULL'
-    metadata['container_meta'] = '{}'
+    metadata['container_create_time'] = data.setdefault('created_at','NULL')
+    metadata['container_last_modified_time'] = data.setdefault('put_timestamp','NULL')
+    metadata['container_last_changed_time'] = data.setdefault('put_timestamp','NULL')
+    metadata['container_delete_time'] = data.setdefault('delete_timestamp','NULL')
+    metadata['container_last_activity_time'] = data.setdefault('put_timestamp','NULL') 
+                            #last_activity_time needs to be updated on meta server
+    metadata['container_read_permissions'] ='NULL' #Not Implemented yet
+    metadata['container_write_permissions'] ='NULL' #Not Implemented yet
+    metadata['container_sync_to'] = data.setdefault('x_container_sync_point1','NULL')
+    metadata['container_sync_key'] = data.setdefault('x_container_sync_point2','NULL')
+    metadata['container_versions_location'] = 'NULL' #Not Implemented yet
+    metadata['container_object_count'] = data.setdefault('object_count','NULL')
+    metadata['container_bytes_used'] = data.setdefault('bytes_used','NULL')
+    metadata['container_delete_at'] = data.setdefault('delete_timestamp','NULL')
+
+    #Insert all Container custom metadata
+    for custom in data:
+        if(custom.startswith("X-Container-Meta")):
+            sanitized_custom = custom[2:16].lower() + custom[16:]
+            sanitized_custom = sanitized_custom.replace('-','_')
+            metadata[sanitized_custom] = data[custom]
     return metadata
