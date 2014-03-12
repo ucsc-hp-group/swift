@@ -168,7 +168,7 @@ def get_account_md_schema():
         'account_first_use_time': 'TEXT',
         'account_last_modified_time': 'TEXT',
         'account_last_changed_time': 'TEXT',
-        'account_delete_time: TEXT',
+        'account_delete_time': 'TEXT',
         'account_last_activity_time': 'TEXT',
         'account_container_count': 'INTEGER',
         'account_object_count': 'INTEGER',

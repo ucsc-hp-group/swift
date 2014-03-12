@@ -323,103 +323,73 @@ class MetadataBroker(DatabaseBroker):
         if attrsStartWith(attrs) == "BAD":
             return "BAD"
 
+        fromStr = """account_metadata 
+            INNER JOIN container_metadata 
+            ON account_name=container_account_name 
+            INNER JOIN object_metadata 
+            ON account_name=object_account_name
+            AND container_name=object_container_name"""
+
         # Get information from the current object
         if obj != "" and obj != None:
             Ouri = "'/" + acc + "/" +  con + "/" + obj + "'"
             Curi = "'/" + acc + "/" +  con + "'"
             Auri = "'/" + acc + "'"
 
-            if 'all_object_attrs' in attrs.split(','):
-                return """
-                    SELECT * 
-                    FROM object_metadata 
-                    WHERE object_uri=%s
-                """ % Ouri
-
-            elif attrsStartWith(attrs) == 'object':
-                return """
-                    SELECT %s,object_uri 
-                    FROM object_metadata 
-                    WHERE object_uri=%s
-                """ % (attrs, Ouri)
-
-            elif attrsStartWith(attrs) == 'container':
-                return """
-                    SELECT %s,container_uri 
-                    FROM container_metadata 
-                    WHERE container_uri=%s
-                """ % (attrs, Curi)
-
-            elif attrsStartWith(attrs) == 'account':
-                return """
-                    SELECT %s,account_uri 
-                    FROM account_metadata 
-                    WHERE account_uri=%s
-                """ % (attrs, Auri)
+            return """
+                SELECT distinct %s,account_uri 
+                FROM %s
+                WHERE %s_uri=%s
+            """ % (attrs, fromStr, attrsStartWith(attrs), Auri)
 
         # Get information from the current container
         elif con != "" and con != None: 
             uri = "'/" + acc + "/" +  con + "'"
             Auri = "'/" + acc + "'"
-            if 'all_container_attrs' in attrs.split(','):
+            if attrsStartWith(attrs) == 'object':
                 return """
-                    SELECT * 
-                    FROM container_metadata 
-                    WHERE container_uri=%s
-                """ % uri
-
-            elif attrsStartWith(attrs) == 'object':
-                return """
-                    SELECT %s,object_uri 
+                    SELECT distinct %s,object_uri 
                     FROM object_metadata 
                     WHERE object_container_name=%s
                 """ % (attrs, "'"+con+"'")
 
             elif attrsStartWith(attrs) == 'container':
                 return """
-                    SELECT %s,container_uri 
-                    FROM container_metadata 
+                    SELECT distinct %s,container_uri 
+                    FROM %s 
                     WHERE container_uri=%s
-                """ % (attrs, uri)
+                """ % (attrs, fromStr, uri)
 
             elif attrsStartWith(attrs) == 'account':
                 return """
-                    SELECT %s,account_uri 
-                    FROM account_metadata 
+                    SELECT distinct %s,account_uri
+                    FROM %s 
                     WHERE account_uri=%s
-                """ % (attrs, Auri)
+                """ % (attrs, fromStr, Auri)
 
         # Get information from the current account
         elif acc != "" and acc != None:
             uri = "'/" + acc + "'"
-            if 'all_account_attrs' in attrs.split(','):
+            if attrsStartWith(attrs) == 'object':
                 return """
-                    SELECT * 
-                    FROM account_metadata 
-                    WHERE account_uri=%s
-                """ % uri
-
-            elif attrsStartWith(attrs) == 'object':
-                return """
-                    SELECT %s,object_uri 
-                    FROM object_metadata 
-                    WHERE object_account_name=%s 
-                    AND object_container_name=%s
-                """ % (attrs, "'"+acc+"'", "'"+con+"'")
+                    SELECT distinct %s,object_uri
+                    FROM %s
+                    WHERE object_account_name='%s' 
+                """ % (attrs, fromStr, acc)
 
             elif attrsStartWith(attrs) == 'container':
                 return """
-                    SELECT %s,container_uri 
-                    FROM container_metadata 
-                    WHERE container_account_name=%s
-                """ % (attrs, "'"+acc+"'")
+                    SELECT distinct %s,container_uri 
+                    FROM %s 
+                    WHERE container_account_name='%s'
+                """ % (attrs, fromStr, acc)
 
             elif attrsStartWith(attrs) == 'account':
                 return """
-                    SELECT %s,account_uri 
-                    FROM account_metadata 
+                    SELECT distinct %s,account_uri 
+                    FROM %s 
                     WHERE account_uri=%s
-                """ % (attrs, uri)
+                """ % (attrs, fromStr, uri)
 
     # URI Query parser
     def get_uri_query(self, sql, queries):
@@ -428,36 +398,50 @@ class MetadataBroker(DatabaseBroker):
         additional query information based on ?query=<> from the URI 
         '''
         
-        table = re.sub(r' ','',re.split(r'WHERE',re.split(r'FROM',sql)[1])[0])
+        # table = re.sub(r' ','',re.split(r'WHERE',re.split(r'FROM',sql)[1])[0])
 
-        # Normalize ANDs, and split query string by that pattern
-        tmp_queries = re.sub(r"[aA][nN][dD]", "AND", queries)
-        query_list  = re.split(r"AND", tmp_queries)
-        clauses     = []
+        # # Normalize ANDs, and split query string by that pattern
+        # tmp_queries = re.sub(r"[aA][nN][dD]", "AND", queries)
+        # query_list  = re.split(r"AND", tmp_queries)
+        # clauses     = []
 
-        # Build clause list
-        for query in query_list:
-            if cross_reference_md_schema(query, table):
-                clauses.append(query)
-            else:
-                clauses.append(None)
+        # # Build clause list
+        # for query in query_list:
+        #     if cross_reference_md_schema(query, table):
+        #         clauses.append(query)
+        #     else:
+        #         clauses.append(None)
 
-        # Ensure the query list is valid
-        if None in clauses:
+        # # Ensure the query list is valid
+        # if None in clauses:
+        #     pass
             # TODO: raise hackles
 
         # Return subqueries appended to given query
-        return sql + ''.join([
-                ' AND ' + clause
-            if index > 0
-            else
-                clause
-            for index, clause in enumerate(clauses)
-        ])
+        # return sql + ''.join([
+        #         ' AND ' + clause
+        #     if index > 0
+        #     else
+        #         clause
+        #     for index, clause in enumerate(clauses)
+        # ])
 
 
-    def get_custom_attributes_query(self, customAttrs):
-        return ""
+    def custom_attributes_query(self, customAttrs, sysMetaList):
+        with self.get() as conn:
+            for x in sysMetaList:
+                uri = x.keys()[0]
+                query = """SELECT custom_key, custom_value
+                FROM custom_metadata
+                WHERE uri='%s'
+                """ % uri
+                cur = conn.cursor()
+                cur.execute(query)
+                l = cur.fetchall()
+                for d in l:
+                    if d['custom_key'] in customAttrs:
+                        x[uri][d['custom_key']] = d['custom_value']
+        return sysMetaList
 
     def execute_query(self, query, acc, con, obj, includeURI):
         with self.get() as conn:
