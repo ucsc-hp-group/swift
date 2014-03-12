@@ -179,7 +179,12 @@ class MetadataController(object):
     @public
     @timing_stats()
     def GET(self, req):
-        # Handle HTTP GET requests
+        """
+        Handle HTTP GET requests
+        Build SQL queries piece by piece and then execute
+        Custom attributes need to be handled specially, since they exist
+        in a seperate table
+        """
         broker = self._get_metadata_broker()
 
         base_version ,acc, con, obj = split_path(req.path, 1, 4, True)
@@ -231,6 +236,12 @@ class MetadataController(object):
     @public
     @timing_stats()
     def PUT(self, req):
+        """
+        Handles incoming PUT requests
+        Crawlers running on the object/container/account servers
+        will send over new metadata. This is where that new metadata
+        is sent to the database
+        """
         #drive, partition, account = split_and_validate_path(req, 3)
 
         # if 'x-timestamp' not in req.headers \
@@ -341,6 +352,11 @@ class MetadataController(object):
         return res(env, start_response)
 
 def split_attrs_by_scope(attrs):
+    """
+    Take the list of attributes and split them by object,container,account,
+    superset, and custom.
+    Reuturns a tuple of attribute strings.
+    """
     acc_star = []
     con_star = []
     obj_star = []

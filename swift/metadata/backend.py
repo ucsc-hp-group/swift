@@ -301,6 +301,9 @@ class MetadataBroker(DatabaseBroker):
             conn.commit()
 
     def getAll(self):
+        """
+        Dump everything
+        """
         with self.get() as conn:
             conn.row_factory = dict_factory
             cur = conn.cursor()
@@ -318,11 +321,27 @@ class MetadataBroker(DatabaseBroker):
 
     # URI Attributes Parser
     def get_attributes_query(self, acc, con, obj, attrs):
-        
+        """
+        This query starts off the query string by adding the Attributes
+        to be returned in the SELECT statement.
+        Also handles scoping by passing in the scope info:
+
+            If we are in object scope, the only things visible
+            are this object, the parent container, and the parent
+            account.
+
+            If in container scope. All objects in the container are
+            visible, this container, and the parent account.
+
+            If in account scope, All objects and containers in the scope
+            are visible, as well as this account.
+        """
         # Catch bad query
         if attrsStartWith(attrs) == "BAD":
             return "BAD"
 
+        # JOIN all our tables together so the API can do queries
+        # across tables. 
         fromStr = """account_metadata 
             INNER JOIN container_metadata 
             ON account_name=container_account_name 
@@ -330,19 +349,25 @@ class MetadataBroker(DatabaseBroker):
             ON account_name=object_account_name
             AND container_name=object_container_name"""
 
-        # Get information from the current object
+        # Object Scope
         if obj != "" and obj != None:
             Ouri = "'/" + acc + "/" +  con + "/" + obj + "'"
             Curi = "'/" + acc + "/" +  con + "'"
             Auri = "'/" + acc + "'"
-
+            domain = attrsStartWith(attrs)
+            if domain == 'object':
+                uri = Ouri
+            elif domain == 'container':
+                uri = Curi
+            else:
+                uri = Auri
             return """
-                SELECT distinct %s,account_uri 
+                SELECT distinct %s,%s_uri 
                 FROM %s
                 WHERE %s_uri=%s
-            """ % (attrs, fromStr, attrsStartWith(attrs), Auri)
+            """ % (attrs, domain, fromStr, domain, uri)
 
-        # Get information from the current container
+        # Container Scope
         elif con != "" and con != None: 
             uri = "'/" + acc + "/" +  con + "'"
             Auri = "'/" + acc + "'"
@@ -367,7 +392,7 @@ class MetadataBroker(DatabaseBroker):
                     WHERE account_uri=%s
                 """ % (attrs, fromStr, Auri)
 
-        # Get information from the current account
+        # Account scope
         elif acc != "" and acc != None:
             uri = "'/" + acc + "'"
             if attrsStartWith(attrs) == 'object':
@@ -428,6 +453,12 @@ class MetadataBroker(DatabaseBroker):
 
 
     def custom_attributes_query(self, customAttrs, sysMetaList):
+        """
+        This function executes a query to get custom Attributes
+        and merge them into the list of dictionaries which is created
+        before this function is called. Only merges attributes in the
+        customAttrs list passed in.
+        """
         with self.get() as conn:
             for x in sysMetaList:
                 uri = x.keys()[0]
@@ -444,6 +475,15 @@ class MetadataBroker(DatabaseBroker):
         return sysMetaList
 
     def execute_query(self, query, acc, con, obj, includeURI):
+        """
+        Execute the main query. Executes a query which has been built
+        up before this call in server.py
+        The row_factory makes dictionaries of {column : entry} per row returned.
+        We add the URI of the `thing` found in the query as a key in a new dictionary,
+            with the value the previous dictionary
+        Each 'row' is now a dictionary in a list
+        This list of dictonaries is returned
+        """
         with self.get() as conn:
             conn.row_factory = dict_factory
             cur = conn.cursor()
