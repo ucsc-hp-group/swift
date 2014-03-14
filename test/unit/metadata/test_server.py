@@ -16,6 +16,16 @@ from swift.metadata.server import MetadataController
 from swift.common.utils import normalize_timestamp, replication, public, json
 from swift.common.request_helpers import get_sys_meta_prefix
 
+Aattrs = ("account_uri,account_name,account_last_activity_time,"
+            "account_container_count,account_object_count,account_bytes_used,"
+            "account_meta_TESTCUSTOM")
+Cattrs = ("container_uri,container_name,container_account_name,"
+            "container_create_time,container_object_count,container_bytes_used,"
+            "container_meta_TESTCUSTOM")
+Oattrs = ("object_uri,object_name,object_account_name,"
+            "object_container_name,object_uri_create_time,object_etag_hash,object_content_type,"
+            "object_content_length,object_content_encoding,object_content_language,"
+            "object_meta_TESTCUSTOM")
 
 class TestMetadataController(unittest.TestCase):
 
@@ -92,11 +102,7 @@ class TestMetadataController(unittest.TestCase):
         Should return info for all 3 objects
         we uploaded in setup
         """
-        attrs = ("object_uri,object_name,object_account_name,"
-            "object_container_name,object_uri_create_time,object_etag_hash,object_content_type,"
-            "object_content_length,object_content_encoding,object_content_language,"
-            "object_meta_TESTCUSTOM")
-        # attrs = "all_attrs"
+        attrs = Oattrs
         req2 = Request.blank(
             '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
             'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
@@ -154,11 +160,7 @@ class TestMetadataController(unittest.TestCase):
         In container scope give me object attrs
         Should give back the 2 objects in container 1
         """
-        attrs = ("object_uri,object_name,object_account_name,"
-            "object_container_name,object_uri_create_time,object_etag_hash,object_content_type,"
-            "object_content_length,object_content_encoding,object_content_language,"
-            "object_meta_TESTCUSTOM")
-        # attrs = "all_attrs"
+        attrs = Oattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
             'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
@@ -201,11 +203,7 @@ class TestMetadataController(unittest.TestCase):
         In object scope give me object attrs
         Should give back the object in the path
         """
-        attrs = ("object_uri,object_name,object_account_name,"
-            "object_container_name,object_uri_create_time,object_etag_hash,object_content_type,"
-            "object_content_length,object_content_encoding,object_content_language,"
-            "object_meta_TESTCUSTOM")
-        # attrs = "all_attrs"
+        attrs = Oattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1', environ={'REQUEST_METHOD': 'GET',
             'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
@@ -228,6 +226,267 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(metaReturned['object_content_language'], 'en')
         self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
 
+    def test_GET_ACCscope_conAttrs_metadata(self):
+        attrs = Cattrs
+        req2 = Request.blank(
+            '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp2 = req2.get_response(self.controller)
+        self.assert_(resp2.status.startswith('200'))
+        testList = json.loads(resp2.body)
+        self.assert_(len(testList) == 2)
+        testDict = testList[0]
+        self.assert_('/TEST_acc1/TEST_con1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+        self.assertEquals(metaReturned['container_name'], 'TEST_con1')
+        self.assertEquals(metaReturned['container_account_name'], 'TEST_acc1')
+        self.assertEquals(metaReturned['container_create_time'], self.t)
+        self.assertEquals(metaReturned['container_object_count'], 33)
+        self.assertEquals(metaReturned['container_bytes_used'], 3342)
+
+
+        testDict = testList[1]
+        self.assert_('/TEST_acc1/TEST_con2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con2']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con2')
+        self.assertEquals(metaReturned['container_name'], 'TEST_con2')
+        self.assertEquals(metaReturned['container_account_name'], 'TEST_acc1')
+        self.assertEquals(metaReturned['container_create_time'], self.t)
+        self.assertEquals(metaReturned['container_object_count'], 33)
+        self.assertEquals(metaReturned['container_bytes_used'], 3342)
+        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'],'CUSTOM')
+
+
+    def test_GET_CONscope_conAttrs_metadata(self):
+        attrs = Cattrs
+        req2 = Request.blank(
+            '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp2 = req2.get_response(self.controller)
+        self.assert_(resp2.status.startswith('200'))
+        testList = json.loads(resp2.body)
+        self.assert_(len(testList) == 1)
+        testDict = testList[0]
+        self.assert_('/TEST_acc1/TEST_con1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+        self.assertEquals(metaReturned['container_name'], 'TEST_con1')
+        self.assertEquals(metaReturned['container_account_name'], 'TEST_acc1')
+        self.assertEquals(metaReturned['container_create_time'], self.t)
+        self.assertEquals(metaReturned['container_object_count'], 33)
+        self.assertEquals(metaReturned['container_bytes_used'], 3342)
+        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'],'CUSTOM')
+
+
+    def test_GET_OBJscope_conAttrs_metadata(self):
+        attrs = Cattrs
+        req2 = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp2 = req2.get_response(self.controller)
+        self.assert_(resp2.status.startswith('200'))
+        testList = json.loads(resp2.body)
+        self.assert_(len(testList) == 1)
+        testDict = testList[0]
+        self.assert_('/TEST_acc1/TEST_con1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+        self.assertEquals(metaReturned['container_name'], 'TEST_con1')
+        self.assertEquals(metaReturned['container_account_name'], 'TEST_acc1')
+        self.assertEquals(metaReturned['container_create_time'], self.t)
+        self.assertEquals(metaReturned['container_object_count'], 33)
+        self.assertEquals(metaReturned['container_bytes_used'], 3342)
+        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'],'CUSTOM')
+
+
+    def test_GET_ACCscope_accAttrs_metadata(self):
+        attrs = Aattrs
+        req2 = Request.blank(
+            '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp2 = req2.get_response(self.controller)
+        self.assert_(resp2.status.startswith('200'))
+        testList = json.loads(resp2.body)
+        self.assert_(len(testList) == 1)
+        testDict = testList[0]
+        self.assert_('/TEST_acc1' in testDict)
+        metaReturned = testDict['/TEST_acc1']
+        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
+        self.assertEquals(metaReturned['account_name'], 'TEST_acc1')
+        self.assertEquals(metaReturned['account_last_activity_time'], self.t)
+        self.assertEquals(metaReturned['account_container_count'], 1)
+        self.assertEquals(metaReturned['account_object_count'], 33)
+        self.assertEquals(metaReturned['account_bytes_used'], 3342)
+        self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
+
+    def test_GET_CONscope_accAttrs_metadata(self):
+        attrs = Aattrs
+        req2 = Request.blank(
+            '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp2 = req2.get_response(self.controller)
+        self.assert_(resp2.status.startswith('200'))
+        testList = json.loads(resp2.body)
+        self.assert_(len(testList) == 1)
+        testDict = testList[0]
+        self.assert_('/TEST_acc1' in testDict)
+        metaReturned = testDict['/TEST_acc1']
+        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
+        self.assertEquals(metaReturned['account_name'], 'TEST_acc1')
+        self.assertEquals(metaReturned['account_last_activity_time'], self.t)
+        self.assertEquals(metaReturned['account_container_count'], 1)
+        self.assertEquals(metaReturned['account_object_count'], 33)
+        self.assertEquals(metaReturned['account_bytes_used'], 3342)
+        self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
+    
+    def test_GET_OBJscope_accAttrs_metadata(self):
+        attrs = Aattrs
+        req2 = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp2 = req2.get_response(self.controller)
+        self.assert_(resp2.status.startswith('200'))
+        testList = json.loads(resp2.body)
+        self.assert_(len(testList) == 1)
+        testDict = testList[0]
+        self.assert_('/TEST_acc1' in testDict)
+        metaReturned = testDict['/TEST_acc1']
+        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
+        self.assertEquals(metaReturned['account_name'], 'TEST_acc1')
+        self.assertEquals(metaReturned['account_last_activity_time'], self.t)
+        self.assertEquals(metaReturned['account_container_count'], 1)
+        self.assertEquals(metaReturned['account_object_count'], 33)
+        self.assertEquals(metaReturned['account_bytes_used'], 3342)
+        self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
+
+
+    def test_GET_ACCscope_mixedAttrs(self):
+        attrs = Aattrs + "," + Cattrs + "," + Oattrs
+        req2 = Request.blank(
+            '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp2 = req2.get_response(self.controller)
+        self.assert_(resp2.status.startswith('200'))
+        testList = json.loads(resp2.body)
+        self.assert_(len(testList) == 6)
+        testDict = testList[0]
+        self.assert_('/TEST_acc1' in testDict)
+        metaReturned = testDict['/TEST_acc1']
+        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
+        self.assertEquals(metaReturned['account_bytes_used'], 3342)
+        self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
+
+        testDict = testList[1]
+        self.assert_('/TEST_acc1/TEST_con1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+        self.assertEquals(metaReturned['container_bytes_used'], 3342)
+        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'],'CUSTOM')
+
+
+        testDict = testList[2]
+        self.assert_('/TEST_acc1/TEST_con2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con2']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con2')
+        self.assertEquals(metaReturned['container_bytes_used'], 3342)
+        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'],'CUSTOM')
+
+        testDict = testList[3]
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
+        self.assertEquals(metaReturned['object_content_language'], 'en')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+
+        testDict = testList[4]
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
+        self.assertEquals(metaReturned['object_content_language'], 'en')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+
+        testDict = testList[5]
+        self.assert_('/TEST_acc1/TEST_con2/TEST_obj3' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con2/TEST_obj3']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con2/TEST_obj3')
+        self.assertEquals(metaReturned['object_content_language'], 'en')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+
+
+    def test_GET_CONscope_mixedAttrs(self):
+        attrs = Aattrs + "," + Cattrs + "," + Oattrs
+        req2 = Request.blank(
+            '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp2 = req2.get_response(self.controller)
+        self.assert_(resp2.status.startswith('200'))
+        testList = json.loads(resp2.body)
+        self.assert_(len(testList) == 4)
+        testDict = testList[0]
+        self.assert_('/TEST_acc1' in testDict)
+        metaReturned = testDict['/TEST_acc1']
+        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
+        self.assertEquals(metaReturned['account_bytes_used'], 3342)
+        self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
+
+        testDict = testList[1]
+        self.assert_('/TEST_acc1/TEST_con1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+        self.assertEquals(metaReturned['container_bytes_used'], 3342)
+        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'],'CUSTOM')
+
+        testDict = testList[2]
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
+        self.assertEquals(metaReturned['object_content_language'], 'en')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+
+        testDict = testList[3]
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
+        self.assertEquals(metaReturned['object_content_language'], 'en')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+
+
+
+    def test_GET_CONscope_mixedAttrs(self):
+        attrs = Aattrs + "," + Cattrs + "," + Oattrs
+        req2 = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp2 = req2.get_response(self.controller)
+        self.assert_(resp2.status.startswith('200'))
+        testList = json.loads(resp2.body)
+        self.assert_(len(testList) == 3)
+        testDict = testList[0]
+        self.assert_('/TEST_acc1' in testDict)
+        metaReturned = testDict['/TEST_acc1']
+        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
+        self.assertEquals(metaReturned['account_bytes_used'], 3342)
+        self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
+
+        testDict = testList[1]
+        self.assert_('/TEST_acc1/TEST_con1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+        self.assertEquals(metaReturned['container_bytes_used'], 3342)
+        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'],'CUSTOM')
+
+        testDict = testList[2]
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
+        self.assertEquals(metaReturned['object_content_language'], 'en')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+
+
+    ########################
+    #   HELPER FUNCTIONS   #
+    ########################
     def getTestObjDict(self, accNum, conNum, objNum):
         metadata = {}
         uri = "/TEST_acc" + str(accNum) + "/TEST_con" + str(conNum) + "/TEST_obj" + str(objNum)
@@ -284,6 +543,7 @@ class TestMetadataController(unittest.TestCase):
         metadata['container_object_count'] = '33'
         metadata['container_bytes_used'] = '3342'
         metadata['container_delete_at'] = self.t
+        metadata['container_meta_TESTCUSTOM'] = 'CUSTOM'
         return metadata
 
     def getTestAccDict(self, accNum):
@@ -300,6 +560,7 @@ class TestMetadataController(unittest.TestCase):
         metadata['account_container_count'] = "1"
         metadata['account_object_count'] = "33"
         metadata['account_bytes_used'] = "3342"
+        metadata['account_meta_TESTCUSTOM'] = 'CUSTOM'
         return metadata
 
 if __name__ == '__main__':
