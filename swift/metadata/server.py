@@ -194,6 +194,11 @@ class MetadataController(object):
         # since no attributes passed in, there can be things from multiple levels of scope
         # Things must come from multiple tables
         # EX: Give me all metadata for `things` in account scope where timestamp < ~something~
+        if 'sorted' in req.headers: 
+            sort_values = req.headers ['sorted']
+        # Store the sorting parameters specified by user to use in sorting function for 
+        # custom data
+        
         elif obj != "" or obj != None:
             attrs = "object_uri, container_uri, account_uri"
         elif con != "" and con != None:
