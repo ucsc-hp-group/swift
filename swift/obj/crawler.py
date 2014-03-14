@@ -50,7 +50,8 @@ class ObjectCrawler(Daemon):
             try:
                 self.object_sweep()
             except (Exception, Timeout):
-                with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
+                with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+")
+                as f:
                     f.write("Exception on object_sweep\n")
             time.sleep(self.interval)
 
@@ -70,8 +71,8 @@ class ObjectCrawler(Daemon):
             if metaDict != {}:
                 metaList.append(format_metadata(metaDict))
         ObjectSender = Sender(self.conf)
-        resp = ObjectSender.sendData(metaList, 'object_crawler' , self.ip, self.port)
-
+        resp = ObjectSender.sendData(
+            metaList, 'object_crawler', self.ip, self.port)
 
     def collect_object(self, location):
         """
@@ -86,45 +87,67 @@ class ObjectCrawler(Daemon):
                 f.write("DISKFILE DOES NOT EXIST\n")
         return metadata
 
-    def format_metadata (self, data):
+    def format_metadata(self, data):
         metadata = {}
-        uri = data['name'].split("/") 
+        uri = data['name'].split("/")
         metadata['object_uri'] = data['name']
         metadata['object_name'] = ("/".join(uri[3:]))
         metadata['object_account_name'] = uri[1]
         metadata['object_container_name'] = uri[2]
-        metadata['object_location'] = 'NULL' #Not implemented yet
-        metadata['object_uri_create_time'] = data.setdefault('X-Timestamp','NULL')
-        #Uri create needs to be implemented on meta server.
-        metadata['object_last_modified_time'] = data.setdefault('X-Timestamp','NULL')
-        metadata['object_last_changed_time'] = data.setdefault('X-Timestamp','NULL')
-        metadata['object_delete_time'] = data.setdefault('delete_timestamp','NULL')
-        metadata['object_last_activity_time'] = data.setdefault('X-Timestamp','NULL')
-        metadata['object_etag_hash'] = data.setdefault('ETag','NULL')
-        metadata['object_content_type'] = data.setdefault('Content-Type','NULL')
-        metadata['object_content_length'] = data.setdefault('Content-Length','NULL')
-        metadata['object_content_encoding'] = data.setdefault('Content-Encoding','NULL')
-        metadata['object_content_disposition'] = data.setdefault('Content-Disposition','NULL')
-        metadata['object_content_language'] = data.setdefault('Content-Langauge','NULL')
-        metadata['object_cache_control'] = 'NULL' #Not Implemented yet
-        metadata['object_delete_at'] = 'NULL' #Not Implemented yet
-        metadata['object_manifest_type'] = 'NULL'  #Not Implemented yet
-        metadata['object_manifest'] = 'NULL'  #Not Implemented yet
-        metadata['object_access_control_allow_origin'] = 'NULL'  #Not Implemented yet
-        metadata['object_access_control_allow_credentials'] = 'NULL' #Not Implemented yet
-        metadata['object_access_control_expose_headers'] = 'NULL' #Not Implemented yet
-        metadata['object_access_control_max_age'] = 'NULL' #Not Implemented yet
-        metadata['object_access_control_allow_methods'] = 'NULL' #Not Implemented yet
-        metadata['object_access_control_allow_headers'] = 'NULL' #Not Implemented yet
-        metadata['object_origin'] = 'NULL' #Not Implemented yet
-        metadata['object_access_control_request_method'] = 'NULL' #Not Implemented yet
-        metadata['object_access_control_request_headers'] = 'NULL' #Not Implemented yet
+        metadata['object_location'] = 'NULL'  # Not implemented yet
+        metadata['object_uri_create_time'] = \
+            data.setdefault('X-Timestamp', 'NULL')
+
+        # Uri create needs to be implemented on meta server.
+        metadata['object_last_modified_time'] = \
+            data.setdefault('X-Timestamp', 'NULL')
+
+        metadata['object_last_changed_time'] =  \
+            data.setdefault('X-Timestamp', 'NULL')
+
+        metadata['object_delete_time'] = \
+            data.setdefault('delete_timestamp', 'NULL')
+
+        metadata['object_last_activity_time'] = \
+            data.setdefault('X-Timestamp', 'NULL')
+
+        metadata['object_etag_hash'] = \
+            data.setdefault('ETag', 'NULL')
+
+        metadata['object_content_type'] = \
+            data.setdefault('Content-Type', 'NULL')
+
+        metadata['object_content_length'] = \
+            data.setdefault('Content-Length', 'NULL')
+
+        metadata['object_content_encoding'] = \
+            data.setdefault('Content-Encoding', 'NULL')
+
+        metadata['object_content_disposition'] = \
+            data.setdefault('Content-Disposition', 'NULL')
+
+        metadata['object_content_language'] = \
+            data.setdefault('Content-Langauge', 'NULL')
+
+        metadata['object_cache_control'] = 'NULL'  # Not Implemented yet
+        metadata['object_delete_at'] = 'NULL'
+        metadata['object_manifest_type'] = 'NULL'
+        metadata['object_manifest'] = 'NULL'
+        metadata['object_access_control_allow_origin'] = 'NULL'
+        metadata['object_access_control_allow_credentials'] = 'NULL'
+        metadata['object_access_control_expose_headers'] = 'NULL'
+        metadata['object_access_control_max_age'] = 'NULL'
+        metadata['object_access_control_allow_methods'] = 'NULL'
+        metadata['object_access_control_allow_headers'] = 'NULL'
+        metadata['object_origin'] = 'NULL'
+        metadata['object_access_control_request_method'] = 'NULL'
+        metadata['object_access_control_request_headers'] = 'NULL'
 
         #Insert all Object custom metadata
         for custom in data:
-           if(custom.startswith("X-Object-Meta")):
+            if(custom.startswith("X-Object-Meta")):
                 sanitized_custom = custom[2:13].lower() + custom[13:]
-                sanitized_custom = sanitized_custom.replace('-','_')
+                sanitized_custom = sanitized_custom.replace('-', '_')
                 metadata[sanitized_custom] = data[custom]
 
         return metadata

@@ -1,8 +1,21 @@
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
-# Metadata server
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-import os, time, traceback
+import os
+import time
+import traceback
 from datetime import datetime
 from swift import gettext_ as _
 from xml.etree.cElementTree import Element, SubElement, tostring
@@ -21,7 +34,7 @@ from swift.common.utils import get_logger, hash_path, public, \
     override_bytes_from_content_type, split_path
 
 from swift.common.constraints import ACCOUNT_LISTING_LIMIT, \
-CONTAINER_LISTING_LIMIT, check_mount, check_float, check_utf8
+    CONTAINER_LISTING_LIMIT, check_mount, check_float, check_utf8
 
 from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
@@ -37,6 +50,7 @@ from swift.metadata.utils import metadata_listing_response, \
     metadata_deleted_response
 
 DATADIR = 'metadata'
+
 
 class MetadataController(object):
     # WSGI Controller for metadata server
@@ -72,9 +86,6 @@ class MetadataController(object):
             logger=self.logger
         )
 
-        # self.auto_create_account_prefix = conf.get('auto_create_account_prefix') 
-        #     or '.'
-
         if config_true_value(conf.get('allow_versions', 'f')):
             self.save_headers.append('x-versions-location')
 
@@ -103,7 +114,8 @@ class MetadataController(object):
                     attr.startswith('container_meta') or \
                     attr.startswith('account_meta'):
                 pass
-            elif attr not in ['object_uri',
+            elif attr not in [
+                    'object_uri',
                     'object_name',
                     'object_account_name',
                     'object_container_name',
@@ -161,8 +173,8 @@ class MetadataController(object):
                     'account_object_count',
                     'account_bytes_used',
                     'account_meta',
-                    'all_attrs', #TODO: maybe put these below
-                    'all_system_attrs', #and handle here
+                    'all_attrs',  # TODO: maybe put these below
+                    'all_system_attrs',  # and handle here
                     'all_meta_attrs',
                     'all_account_attrs'
                     'all_account_system_attrs',
@@ -187,18 +199,20 @@ class MetadataController(object):
         """
         broker = self._get_metadata_broker()
 
-        base_version ,acc, con, obj = split_path(req.path, 1, 4, True)
+        base_version, acc, con, obj = split_path(req.path, 1, 4, True)
         if 'attributes' in req.headers:
             attrs = req.headers['attributes']
         # if there is no attributes lists, include everything in scope
-        # since no attributes passed in, there can be things from multiple levels of scope
+        # since no attributes passed in, there can be
+        #  things from multiple levels of scope
         # Things must come from multiple tables
-        # EX: Give me all metadata for `things` in account scope where timestamp < ~something~
-        elif obj != "" or obj != None:
+        # EX: Give me all metadata for `things` in
+        # account scope where timestamp < ~something~
+        elif obj != "" or obj is not None:
             attrs = "object_uri, container_uri, account_uri"
-        elif con != "" and con != None:
+        elif con != "" and con is not None:
             attrs = "container_uri, account_uri"
-        elif acc != "" and acc != None:
+        elif acc != "" and acc is not None:
             attrs = "account_uri"
         else:
             attrs = "object_uri, container_uri, account_uri"
@@ -210,18 +224,23 @@ class MetadataController(object):
             accAttrs, conAttrs, objAttrs, superAttrs, customAttrs = \
                 split_attrs_by_scope(attrs)
 
-            accQuery = broker.get_attributes_query(acc,con,obj,accAttrs)
-            conQuery = broker.get_attributes_query(acc,con,obj,conAttrs)
-            objQuery = broker.get_attributes_query(acc,con,obj,objAttrs)
-
+            accQuery = broker.get_attributes_query(acc, con, obj, accAttrs)
+            conQuery = broker.get_attributes_query(acc, con, obj, conAttrs)
+            objQuery = broker.get_attributes_query(acc, con, obj, objAttrs)
 
             ret = []
             if accQuery != "BAD":
-                ret.extend(broker.execute_query(accQuery, acc, con, obj, 'account_uri' in attrs.split(',') ))
+                ret.extend(broker.execute_query(
+                    accQuery, acc, con, obj,
+                    'account_uri' in attrs.split(',')))
             if conQuery != "BAD":
-                ret.extend(broker.execute_query(conQuery, acc, con, obj, 'container_uri' in attrs.split(',') ))
+                ret.extend(broker.execute_query(
+                    conQuery, acc, con, obj,
+                    'container_uri' in attrs.split(',')))
             if objQuery != "BAD":
-                ret.extend(broker.execute_query(objQuery, acc, con, obj, 'object_uri' in attrs.split(',') ))
+                ret.extend(broker.execute_query(
+                    objQuery, acc, con, obj,
+                    'object_uri' in attrs.split(',')))
 
             ret = broker.custom_attributes_query(customAttrs, ret)
 
@@ -229,9 +248,11 @@ class MetadataController(object):
             status = 200
 
         else:
-            ret = json.dumps(attrs) + str(acc) + " " + str(con) + " " + str(obj)
+            ret = json.dumps(attrs) + str(acc) + \
+                " " + str(con) + " " + str(obj)
             status = 400
-        return Response(request=req, body=ret + "\n", content_type="json", status=status)
+        return Response(
+            request=req, body=ret + "\n", content_type="json", status=status)
 
     @public
     @timing_stats()
@@ -275,7 +296,7 @@ class MetadataController(object):
             f.write(req.headers['user_agent'] + req.body + "\n")
         md_type = req.headers['user-agent']
         md_data = json.loads(req.body)
-        
+
         if not os.path.exists(broker.db_file):
             try:
                 broker.initialize(time.time())
@@ -351,6 +372,7 @@ class MetadataController(object):
         #         self.logger.info(log_message)
         return res(env, start_response)
 
+
 def split_attrs_by_scope(attrs):
     """
     Take the list of attributes and split them by object,container,account,
@@ -363,7 +385,7 @@ def split_attrs_by_scope(attrs):
     all_star = []
     custom_star = []
     for attr in attrs.split(','):
-        if attr != "" or attr != None:
+        if attr != "" or attr is not None:
             if attr.startswith('object_meta') or \
                     attr.startswith('container_meta') or \
                     attr.startswith('account_meta'):
@@ -377,11 +399,11 @@ def split_attrs_by_scope(attrs):
             elif attr.startswith('all'):
                 all_star.append(attr)
     return (",".join(acc_star), ",".join(con_star), ",".join(obj_star),
-        ",".join(all_star), ",".join(custom_star))
+            ",".join(all_star), ",".join(custom_star))
+
 
 def app_factory(global_conf, **local_conf):
     """paste.deploy app factory for creating WSGI container server apps"""
     conf = global_conf.copy()
     conf.update(local_conf)
     return MetadataController(conf)
-    

@@ -1,19 +1,24 @@
-
-import os, time, re, errno, sqlite3
-from uuid import uuid4
-from swift.common.utils import normalize_timestamp, lock_parent_directory
-from swift.common.db import DatabaseBroker, DatabaseConnectionError, \
-    PENDING_CAP, PICKLE_PROTOCOL, utf8encode
-
-import cPickle as pickle
-
-from swift.metadata.utils import build_insert_sql
+# Copyright (c) 2010-2012 OpenStack Foundation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+import os
+import time
+from swift.common.utils import normalize_timestamp
+from swift.common.db import DatabaseBroker
 from swift.common.utils import json
 
-from utils import get_account_md_schema, get_container_md_schema, \
-    get_object_md_schema, cross_reference_md_schema
 
-# Interface with metadata database
 class MetadataBroker(DatabaseBroker):
 
     type = 'metadata'
@@ -125,7 +130,8 @@ class MetadataBroker(DatabaseBroker):
         '''
 
         # Build and execute query for each requested insertion
-        formatted_query = query % (uri, key, value, normalize_timestamp(time.time()))
+        formatted_query = \
+            query % (uri, key, value, normalize_timestamp(time.time()))
         conn.execute(formatted_query)
 
     # Data insertion methods
@@ -166,7 +172,8 @@ class MetadataBroker(DatabaseBroker):
                 )
                 for custom in item:
                     if(custom.startswith("account_meta")):
-                        self.insert_custom_md(conn, item['account_uri'],custom,item[custom])
+                        self.insert_custom_md(
+                            conn, item['account_uri'], custom, item[custom])
                 conn.execute(formatted_query)
             conn.commit()
 
@@ -191,7 +198,9 @@ class MetadataBroker(DatabaseBroker):
                     container_bytes_used
                 )
                 VALUES (
-                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s",
                     "%s", "%s", "%s"
                 )
                 ;
@@ -217,7 +226,8 @@ class MetadataBroker(DatabaseBroker):
                 )
                 for custom in item:
                     if(custom.startswith("container_meta")):
-                        self.insert_custom_md(conn, item['container_uri'],custom,item[custom])
+                        self.insert_custom_md(
+                            conn, item['container_uri'], custom, item[custom])
                 conn.execute(formatted_query)
             conn.commit()
 
@@ -257,7 +267,7 @@ class MetadataBroker(DatabaseBroker):
                 ) VALUES (
                     "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
                     "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
-                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s" 
+                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s"
                 )
                 ;
             '''
@@ -296,7 +306,8 @@ class MetadataBroker(DatabaseBroker):
                 )
                 for custom in item:
                     if(custom.startswith("object_meta")):
-                        self.insert_custom_md(conn, item['object_uri'],custom,item[custom])
+                        self.insert_custom_md(
+                            conn, item['object_uri'], custom, item[custom])
                 conn.execute(formatted_query)
             conn.commit()
 
@@ -316,7 +327,7 @@ class MetadataBroker(DatabaseBroker):
 
         return ''.join([
             json.dumps(obj_data), "\n\n", json.dumps(con_data), "\n\n",
-            json.dumps(acc_data) 
+            json.dumps(acc_data)
         ])
 
     # URI Attributes Parser
@@ -341,18 +352,18 @@ class MetadataBroker(DatabaseBroker):
             return "BAD"
 
         # JOIN all our tables together so the API can do queries
-        # across tables. 
-        fromStr = """account_metadata 
-            INNER JOIN container_metadata 
-            ON account_name=container_account_name 
-            INNER JOIN object_metadata 
+        # across tables.
+        fromStr = """account_metadata
+            INNER JOIN container_metadata
+            ON account_name=container_account_name
+            INNER JOIN object_metadata
             ON account_name=object_account_name
             AND container_name=object_container_name"""
 
         # Object Scope
-        if obj != "" and obj != None:
-            Ouri = "'/" + acc + "/" +  con + "/" + obj + "'"
-            Curi = "'/" + acc + "/" +  con + "'"
+        if obj != "" and obj is not None:
+            Ouri = "'/" + acc + "/" + con + "/" + obj + "'"
+            Curi = "'/" + acc + "/" + con + "'"
             Auri = "'/" + acc + "'"
             domain = attrsStartWith(attrs)
             if domain == 'object':
@@ -362,57 +373,57 @@ class MetadataBroker(DatabaseBroker):
             else:
                 uri = Auri
             return """
-                SELECT distinct %s,%s_uri 
+                SELECT distinct %s,%s_uri
                 FROM %s
                 WHERE %s_uri=%s
             """ % (attrs, domain, fromStr, domain, uri)
 
         # Container Scope
-        elif con != "" and con != None: 
-            uri = "'/" + acc + "/" +  con + "'"
+        elif con != "" and con is not None:
+            uri = "'/" + acc + "/" + con + "'"
             Auri = "'/" + acc + "'"
             if attrsStartWith(attrs) == 'object':
                 return """
-                    SELECT distinct %s,object_uri 
-                    FROM object_metadata 
+                    SELECT distinct %s,object_uri
+                    FROM object_metadata
                     WHERE object_container_name=%s
                 """ % (attrs, "'"+con+"'")
 
             elif attrsStartWith(attrs) == 'container':
                 return """
-                    SELECT distinct %s,container_uri 
-                    FROM %s 
+                    SELECT distinct %s,container_uri
+                    FROM %s
                     WHERE container_uri=%s
                 """ % (attrs, fromStr, uri)
 
             elif attrsStartWith(attrs) == 'account':
                 return """
                     SELECT distinct %s,account_uri
-                    FROM %s 
+                    FROM %s
                     WHERE account_uri=%s
                 """ % (attrs, fromStr, Auri)
 
         # Account scope
-        elif acc != "" and acc != None:
+        elif acc != "" and acc is not None:
             uri = "'/" + acc + "'"
             if attrsStartWith(attrs) == 'object':
                 return """
                     SELECT distinct %s,object_uri
                     FROM %s
-                    WHERE object_account_name='%s' 
+                    WHERE object_account_name='%s'
                 """ % (attrs, fromStr, acc)
 
             elif attrsStartWith(attrs) == 'container':
                 return """
-                    SELECT distinct %s,container_uri 
-                    FROM %s 
+                    SELECT distinct %s,container_uri
+                    FROM %s
                     WHERE container_account_name='%s'
                 """ % (attrs, fromStr, acc)
 
             elif attrsStartWith(attrs) == 'account':
                 return """
-                    SELECT distinct %s,account_uri 
-                    FROM %s 
+                    SELECT distinct %s,account_uri
+                    FROM %s
                     WHERE account_uri=%s
                 """ % (attrs, fromStr, uri)
 
@@ -420,10 +431,11 @@ class MetadataBroker(DatabaseBroker):
     def get_uri_query(self, sql, queries):
         '''
         Takes the output of get_attributes_query() as input (sql), and adds
-        additional query information based on ?query=<> from the URI 
+        additional query information based on ?query=<> from the URI
         '''
-        
-        # table = re.sub(r' ','',re.split(r'WHERE',re.split(r'FROM',sql)[1])[0])
+
+        # table = re.sub(r' ','',re.split(
+        #     r'WHERE',re.split(r'FROM',sql)[1])[0])
 
         # # Normalize ANDs, and split query string by that pattern
         # tmp_queries = re.sub(r"[aA][nN][dD]", "AND", queries)
@@ -440,7 +452,7 @@ class MetadataBroker(DatabaseBroker):
         # # Ensure the query list is valid
         # if None in clauses:
         #     pass
-            # TODO: raise hackles
+        #     TODO: raise hackles
 
         # Return subqueries appended to given query
         # return sql + ''.join([
@@ -450,7 +462,6 @@ class MetadataBroker(DatabaseBroker):
         #         clause
         #     for index, clause in enumerate(clauses)
         # ])
-
 
     def custom_attributes_query(self, customAttrs, sysMetaList):
         """
@@ -476,11 +487,14 @@ class MetadataBroker(DatabaseBroker):
 
     def execute_query(self, query, acc, con, obj, includeURI):
         """
-        Execute the main query. Executes a query which has been built
+        Execute the main query.
+        Executes a query which has been built
         up before this call in server.py
-        The row_factory makes dictionaries of {column : entry} per row returned.
-        We add the URI of the `thing` found in the query as a key in a new dictionary,
-            with the value the previous dictionary
+        The row_factory makes dictionaries of
+        {column : entry} per row returned.
+        We add the URI of the `thing` found in the query
+        as a key in a new dictionary,
+        with the value the previous dictionary
         Each 'row' is now a dictionary in a list
         This list of dictonaries is returned
         """
@@ -512,15 +526,15 @@ class MetadataBroker(DatabaseBroker):
                         pass
                 else:
                     try:
-                        retList.append({row['object_uri'] : row})
+                        retList.append({row['object_uri']: row})
                     except KeyError:
                         pass
                     try:
-                        retList.append({row['container_uri'] : row})
+                        retList.append({row['container_uri']: row})
                     except KeyError:
                         pass
                     try:
-                        retList.append({row['account_uri'] : row})
+                        retList.append({row['account_uri']: row})
                     except KeyError:
                         pass
             return retList
@@ -528,24 +542,15 @@ class MetadataBroker(DatabaseBroker):
     def is_deleted(self, mdtable, timestamp=None):
         '''
         Determine whether a DB is considered deleted
-        :param mdtable: a string representing the relevant object type (account, 
-            container, object)
+        :param mdtable: a string representing the relevant object type
+            (account, container, object)
         :returns: True if the DB is considered deleted, False otherwise
         '''
         if self.db_file != ':memory:' and not os.path.exists(self.db_file):
             return True
         self._commit_puts_stale_ok()
         return False
-        # with self.get() as conn:
-        #     query = '''
-        #         SELECT put_timestamp, delete_timestamp, object_count
-        #         FROM %s_metadata
-        #     ''' % (mdtable.split('_')[0])
-        #     row = conn.execute(query).fetchone()
-        #     if timestamp and row['delete_timestamp'] > timestamp:
-        #         return False
-        #     return (row['object_count'] in (None, '', 0, '0')) and \
-        #         (float(row['delete_timestamp']) > float(row['put_timestamp']))
+
 
 #converts query return into a dictionary
 def dict_factory(cursor, row):
@@ -554,15 +559,17 @@ def dict_factory(cursor, row):
         d[col[0]] = row[idx]
     return d
 
+
 # Add URI to dict as `label`
 def attachURI(metaDict, acc, con, obj):
-    if obj != "" and obj != None:
-        uri = '/'.join(['',acc,con,obj])
-    elif con != "" and con != None :
-        uri = '/'.join(['',acc,con])
+    if obj != "" and obj is not None:
+        uri = '/'.join(['', acc, con, obj])
+    elif con != "" and con is not None:
+        uri = '/'.join(['', acc, con])
     else:
         uri = '/' + acc
     return {uri: metaDict}
+
 
 #checks if every attribute in the list starts with the correct.
 #returns the thing it begins with (object/container/account)

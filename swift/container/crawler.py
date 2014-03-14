@@ -52,9 +52,8 @@ class ContainerCrawler(Daemon):
             if metaDict != {}:
                 metaList.append(format_metadata(metaDict))
         ContainerSender = Sender(self.conf)
-        ContainerSender.sendData(metaList, 'container_crawler' , self.ip, self.port)
-
-
+        ContainerSender.sendData(
+            metaList, 'container_crawler', self.ip, self.port)
 
     def run_forever(self, *args, **kwargs):
         """Run the container crawler until stopped."""
@@ -95,31 +94,49 @@ class ContainerCrawler(Daemon):
             self.logger.increment('failures')
         return metaDict
 
-def format_metadata (data):
+
+def format_metadata(data):
     metadata = {}
-    uri = "/" + data['account'] + "/" + data['container'] 
+    uri = "/" + data['account'] + "/" + data['container']
     metadata['container_uri'] = uri
     metadata['container_name'] = data['container']
     metadata['container_account_name'] = data['account']
-    metadata['container_create_time'] = data.setdefault('created_at','NULL')
-    metadata['container_last_modified_time'] = data.setdefault('put_timestamp','NULL')
-    metadata['container_last_changed_time'] = data.setdefault('put_timestamp','NULL')
-    metadata['container_delete_time'] = data.setdefault('delete_timestamp','NULL')
-    metadata['container_last_activity_time'] = data.setdefault('put_timestamp','NULL') 
-                            #last_activity_time needs to be updated on meta server
-    metadata['container_read_permissions'] ='NULL' #Not Implemented yet
-    metadata['container_write_permissions'] ='NULL' #Not Implemented yet
-    metadata['container_sync_to'] = data.setdefault('x_container_sync_point1','NULL')
-    metadata['container_sync_key'] = data.setdefault('x_container_sync_point2','NULL')
-    metadata['container_versions_location'] = 'NULL' #Not Implemented yet
-    metadata['container_object_count'] = data.setdefault('object_count','NULL')
-    metadata['container_bytes_used'] = data.setdefault('bytes_used','NULL')
-    metadata['container_delete_at'] = data.setdefault('delete_timestamp','NULL')
+    metadata['container_create_time'] = data.setdefault('created_at', 'NULL')
+    metadata['container_last_modified_time'] = \
+        data.setdefault('put_timestamp', 'NULL')
+
+    metadata['container_last_changed_time'] = \
+        data.setdefault('put_timestamp', 'NULL')
+
+    metadata['container_delete_time'] = \
+        data.setdefault('delete_timestamp', 'NULL')
+
+    metadata['container_last_activity_time'] = \
+        data.setdefault('put_timestamp', 'NULL')
+
+        #last_activity_time needs to be updated on meta server
+    metadata['container_read_permissions'] = 'NULL'  # Not Implemented yet
+    metadata['container_write_permissions'] = 'NULL'
+    metadata['container_sync_to'] = \
+        data.setdefault('x_container_sync_point1', 'NULL')
+
+    metadata['container_sync_key'] = \
+        data.setdefault('x_container_sync_point2', 'NULL')
+
+    metadata['container_versions_location'] = 'NULL'
+    metadata['container_object_count'] = \
+        data.setdefault('object_count', 'NULL')
+
+    metadata['container_bytes_used'] = \
+        data.setdefault('bytes_used', 'NULL')
+
+    metadata['container_delete_at'] = \
+        data.setdefault('delete_timestamp', 'NULL')
 
     #Insert all Container custom metadata
     for custom in data:
         if(custom.startswith("X-Container-Meta")):
             sanitized_custom = custom[2:16].lower() + custom[16:]
-            sanitized_custom = sanitized_custom.replace('-','_')
+            sanitized_custom = sanitized_custom.replace('-', '_')
             metadata[sanitized_custom] = data[custom]
     return metadata
