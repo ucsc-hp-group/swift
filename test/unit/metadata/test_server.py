@@ -227,6 +227,10 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
 
     def test_GET_ACCscope_conAttrs_metadata(self):
+        """
+        In Account scope, specifiying container attrs.
+        We should get back all the containers in that account
+        """
         attrs = Cattrs
         req2 = Request.blank(
             '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
@@ -259,6 +263,10 @@ class TestMetadataController(unittest.TestCase):
 
 
     def test_GET_CONscope_conAttrs_metadata(self):
+        """
+        In Container scope, specifiying container attrs
+        We should get back that container's metadata
+        """
         attrs = Cattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
@@ -280,6 +288,11 @@ class TestMetadataController(unittest.TestCase):
 
 
     def test_GET_OBJscope_conAttrs_metadata(self):
+        """
+        In object scope, specifying container attrs
+        We should get back the container that the object
+        belongs to
+        """
         attrs = Cattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1', environ={'REQUEST_METHOD': 'GET',
@@ -301,6 +314,10 @@ class TestMetadataController(unittest.TestCase):
 
 
     def test_GET_ACCscope_accAttrs_metadata(self):
+        """
+        In account scope specifiying account attrs,
+        we should get back that account
+        """
         attrs = Aattrs
         req2 = Request.blank(
             '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
@@ -321,6 +338,11 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
 
     def test_GET_CONscope_accAttrs_metadata(self):
+        """
+        In container scope specifying account attrs
+        We should get back the account that the
+        container belongs to
+        """
         attrs = Aattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
@@ -341,6 +363,10 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
     
     def test_GET_OBJscope_accAttrs_metadata(self):
+        """
+        In object scope specifying account attrs
+        We should get back the account the object belongs to
+        """
         attrs = Aattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1', environ={'REQUEST_METHOD': 'GET',
@@ -362,6 +388,13 @@ class TestMetadataController(unittest.TestCase):
 
 
     def test_GET_ACCscope_mixedAttrs(self):
+        """
+        In account scope specifying mixed attributes
+        We should get back:
+            Attrs from the account
+            Attrs from all containers under the account
+            Attrs from all objects under the account
+        """
         attrs = Aattrs + "," + Cattrs + "," + Oattrs
         req2 = Request.blank(
             '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
@@ -415,6 +448,13 @@ class TestMetadataController(unittest.TestCase):
 
 
     def test_GET_CONscope_mixedAttrs(self):
+        """
+        In container scope, specifying mixed attrs
+        We should get back
+            attrs from the account the container belongs to
+            attrs from the container specified
+            attrs from all the objects under that container
+        """
         attrs = Aattrs + "," + Cattrs + "," + Oattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
@@ -453,7 +493,14 @@ class TestMetadataController(unittest.TestCase):
 
 
 
-    def test_GET_CONscope_mixedAttrs(self):
+    def test_GET_OBJscope_mixedAttrs(self):
+        """
+        In object scope, mixed attrs
+        Should get back
+            attrs from the account the object is under
+            attrs from the container the object is under
+            attrs from tyhe object
+        """
         attrs = Aattrs + "," + Cattrs + "," + Oattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1', environ={'REQUEST_METHOD': 'GET',

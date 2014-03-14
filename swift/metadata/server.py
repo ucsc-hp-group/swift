@@ -384,3 +384,4 @@ def app_factory(global_conf, **local_conf):
     conf = global_conf.copy()
     conf.update(local_conf)
     return MetadataController(conf)
+    
