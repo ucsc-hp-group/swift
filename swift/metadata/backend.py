@@ -470,7 +470,7 @@ class MetadataBroker(DatabaseBroker):
                 cur.execute(query)
                 l = cur.fetchall()
                 for d in l:
-                    if d['custom_key'] in customAttrs:
+                    if d['custom_key'] in customAttrs.split(','):
                         x[uri][d['custom_key']] = d['custom_value']
         return sysMetaList
 

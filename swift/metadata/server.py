@@ -213,7 +213,7 @@ class MetadataController(object):
             accQuery = broker.get_attributes_query(acc,con,obj,accAttrs)
             conQuery = broker.get_attributes_query(acc,con,obj,conAttrs)
             objQuery = broker.get_attributes_query(acc,con,obj,objAttrs)
-            
+
 
             ret = []
             if accQuery != "BAD":
