@@ -387,7 +387,7 @@ class MetadataBroker(DatabaseBroker):
                     SELECT distinct %s,object_uri
                     FROM object_metadata
                     WHERE object_container_name=%s
-                """ % (attrs, "'"+con+"'")
+                """ % (attrs, "'" + con + "'")
 
             elif attrsStartWith(attrs) == 'container':
                 return """
@@ -452,7 +452,7 @@ class MetadataBroker(DatabaseBroker):
         # # Ensure the query list is valid
         # if None in clauses:
         #     pass
-        #     TODO: raise hackles
+        #     TO-DO: raise hackles
 
         # Return subqueries appended to given query
         # return sql + ''.join([

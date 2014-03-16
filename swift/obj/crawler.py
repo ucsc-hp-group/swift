@@ -15,7 +15,7 @@
 
 import time
 from random import random
-from swift.common.utils import get_logger, config_true_value, json
+from swift.common.utils import get_logger, config_true_value
 from swift.common.daemon import Daemon
 from swift.obj.diskfile import DiskFileManager, DiskFileNotExist
 from eventlet import Timeout
@@ -50,9 +50,10 @@ class ObjectCrawler(Daemon):
             try:
                 self.object_sweep()
             except (Exception, Timeout):
-                with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+")
-                as f:
-                    f.write("Exception on object_sweep\n")
+                with open(
+                        "/opt/stack/data/swift/logs/obj-crawler.log", "a+"
+                ) as f:
+                        f.write("Exception on object_sweep\n")
             time.sleep(self.interval)
 
     def run_once(self, *args, **kwargs):
@@ -69,9 +70,9 @@ class ObjectCrawler(Daemon):
         for location in all_locs:
             metaDict = self.collect_object(location)
             if metaDict != {}:
-                metaList.append(format_metadata(metaDict))
+                metaList.append(self.format_metadata(metaDict))
         ObjectSender = Sender(self.conf)
-        resp = ObjectSender.sendData(
+        ObjectSender.sendData(
             metaList, 'object_crawler', self.ip, self.port)
 
     def collect_object(self, location):

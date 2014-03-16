@@ -18,7 +18,7 @@ from random import random
 from swift.container import server as container_server
 from swift.container.backend import ContainerBroker
 from swift.common.utils import get_logger, audit_location_generator, \
-    config_true_value, json
+    config_true_value
 from swift.common.request_helpers import is_sys_or_user_meta
 from swift.common.daemon import Daemon
 from eventlet import Timeout

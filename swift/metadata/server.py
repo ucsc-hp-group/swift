@@ -16,38 +16,26 @@
 import os
 import time
 import traceback
-from datetime import datetime
 from swift import gettext_ as _
-from xml.etree.cElementTree import Element, SubElement, tostring
 
 from eventlet import Timeout
 import swift.common.db
 
 from swift.metadata.backend import MetadataBroker
 from swift.common.db import DatabaseAlreadyExists
-from swift.common.request_helpers import get_param, \
-    get_listing_content_type, split_and_validate_path, is_sys_or_user_meta
 
-from swift.common.utils import get_logger, hash_path, public, \
-    normalize_timestamp, storage_directory, validate_sync_to, \
-    config_true_value, json, timing_stats, replication, \
-    override_bytes_from_content_type, split_path
+from swift.common.utils import get_logger, public, \
+    config_true_value, json, timing_stats, \
+    split_path
 
-from swift.common.constraints import ACCOUNT_LISTING_LIMIT, \
-    CONTAINER_LISTING_LIMIT, check_mount, check_float, check_utf8
+from swift.common.constraints import check_utf8
 
-from swift.common.bufferedhttp import http_connect
-from swift.common.exceptions import ConnectionTimeout
 from swift.common.db_replicator import ReplicatorRpc
-from swift.common.http import HTTP_NOT_FOUND, is_success
 
-from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPConflict, \
-    HTTPCreated, HTTPInternalServerError, HTTPNoContent, HTTPNotFound, \
+from swift.common.swob import HTTPBadRequest, HTTPConflict, \
+    HTTPInternalServerError, HTTPNoContent, \
     HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
-    HTTPInsufficientStorage, HTTPException, HeaderKeyDict, HTTPOk
-
-from swift.metadata.utils import metadata_listing_response, \
-    metadata_deleted_response
+    HTTPException
 
 DATADIR = 'metadata'
 
@@ -282,7 +270,6 @@ class MetadataController(object):
         #     return metadata_deleted_response(broker, req, HTTPNotFound)
 
         # timestamp = normalize_timestamp(req.headers['x-timestamp'])
-        metadata = {}
 
         # Call broker insertion
         if 'user-agent' not in req.headers:
