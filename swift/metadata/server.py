@@ -216,16 +216,22 @@ class MetadataController(object):
             conQuery = broker.get_attributes_query(acc, con, obj, conAttrs)
             objQuery = broker.get_attributes_query(acc, con, obj, objAttrs)
 
+            if 'query' in req.headers:
+                query = req.headers['query']
+                accQuery = broker.get_uri_query(accQuery, query)
+                conQuery = broker.get_uri_query(conQuery, query)
+                objQuery = broker.get_uri_query(objQuery, query)
+
             ret = []
-            if accQuery != "BAD":
+            if not accQuery.startswith("BAD"):
                 ret.extend(broker.execute_query(
                     accQuery, acc, con, obj,
                     'account_uri' in attrs.split(',')))
-            if conQuery != "BAD":
+            if not conQuery.startswith("BAD"):
                 ret.extend(broker.execute_query(
                     conQuery, acc, con, obj,
                     'container_uri' in attrs.split(',')))
-            if objQuery != "BAD":
+            if not objQuery.startswith("BAD"):
                 ret.extend(broker.execute_query(
                     objQuery, acc, con, obj,
                     'object_uri' in attrs.split(',')))

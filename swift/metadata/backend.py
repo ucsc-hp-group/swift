@@ -14,6 +14,7 @@
 # limitations under the License.
 import os
 import time
+import re
 from swift.common.utils import normalize_timestamp
 from swift.common.db import DatabaseBroker
 from swift.common.utils import json
@@ -433,35 +434,7 @@ class MetadataBroker(DatabaseBroker):
         Takes the output of get_attributes_query() as input (sql), and adds
         additional query information based on ?query=<> from the URI
         '''
-
-        # table = re.sub(r' ','',re.split(
-        #     r'WHERE',re.split(r'FROM',sql)[1])[0])
-
-        # # Normalize ANDs, and split query string by that pattern
-        # tmp_queries = re.sub(r"[aA][nN][dD]", "AND", queries)
-        # query_list  = re.split(r"AND", tmp_queries)
-        # clauses     = []
-
-        # # Build clause list
-        # for query in query_list:
-        #     if cross_reference_md_schema(query, table):
-        #         clauses.append(query)
-        #     else:
-        #         clauses.append(None)
-
-        # # Ensure the query list is valid
-        # if None in clauses:
-        #     pass
-        #     TO-DO: raise hackles
-
-        # Return subqueries appended to given query
-        # return sql + ''.join([
-        #         ' AND ' + clause
-        #     if index > 0
-        #     else
-        #         clause
-        #     for index, clause in enumerate(clauses)
-        # ])
+        return sql + " AND (" + queries + ")"
 
     def custom_attributes_query(self, customAttrs, sysMetaList):
         """
