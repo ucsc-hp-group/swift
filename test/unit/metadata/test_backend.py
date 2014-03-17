@@ -123,3 +123,5 @@ class TestMetadataBroker(unittest.TestCase):
 			''')
 
         #queries = ''
+if __name__ == '__main__':
+    unittest.main()
