@@ -421,8 +421,7 @@ class MetadataBroker(DatabaseBroker):
                     SELECT %s,object_uri 
                     FROM object_metadata 
                     WHERE object_account_name=%s 
-                    AND object_container_name=%s
-                """ % (attrs, "'"+acc+"'", "'"+con+"'")
+                """ % (attrs, "'"+acc+"'")
 
             elif attrsStartWith(attrs) == 'container':
                 return """
@@ -447,7 +446,7 @@ class MetadataBroker(DatabaseBroker):
         
         table = re.sub(r' ','',re.split(r'WHERE',re.split(r'FROM',sql)[1])[0])
 
-        return re.escape(sql + queries)
+        return re.escape(sql + " AND (" + queries + ")")
 
 
     def get_custom_attributes_query(self, customAttrs):

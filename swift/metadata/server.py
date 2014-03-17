@@ -216,6 +216,12 @@ class MetadataController(object):
             conQuery = broker.get_attributes_query(acc, con, obj, conAttrs)
             objQuery = broker.get_attributes_query(acc, con, obj, objAttrs)
 
+            if 'query' in req.headers:
+                query = req.header['query']
+                accQuery = broker.get_uri_query(accQuery, query)
+                conQuery = broker.get_uri_query(conQuery, query)
+                objQuery = broker.get_uri_query(objQuery, query)
+
             ret = []
             if accQuery != "BAD":
                 ret.extend(broker.execute_query(
@@ -231,7 +237,6 @@ class MetadataController(object):
                     'object_uri' in attrs.split(',')))
 
             ret = broker.custom_attributes_query(customAttrs, ret)
-
             ret = json.dumps(ret)
             status = 200
 

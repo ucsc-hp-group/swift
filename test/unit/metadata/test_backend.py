@@ -22,11 +22,8 @@ from swift.account.backend import AccountBroker
 from swift.common.utils import normalize_timestamp
 from swift.metadata.backend import MetadataBroker
 
-class TestMetadataBroker(unittest.TestCase):
-    #ef setUp(self):
-     #   broker = MetadataBroker
 
-    '''
+class TestMetadataBroker(unittest.TestCase):
 
     def test_creation(self):
         # Test MetadataBroker.__init__
@@ -60,7 +57,6 @@ class TestMetadataBroker(unittest.TestCase):
             pass
         self.assert_(broker.conn is None)
 
-    '''
     def test_empty(self):
         # Test AccountBroker.empty
         broker = MetadataBroker(':memory:')
@@ -75,14 +71,13 @@ class TestMetadataBroker(unittest.TestCase):
         #todo: remove
         broker.put_container('o', 0, normalize_timestamp(time()), 0, 0)
         self.assert_(broker.empty())
-
+'''
     def get_attributes_query(self, acc, con, obj, attrs):
 
     def test_query_with_attrs(self):
 
     def test_query_with_attrs_and_md_queries(self):
-
-    '''
+'''
     def test_get_uri_query(self, sql, queries):
         sql = """
             SELECT something 
