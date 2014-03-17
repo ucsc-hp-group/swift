@@ -1,6 +1,12 @@
 from collections import OrderedDict
 import operator
 
+# this calss will sort an attribute in a given list, and then return the sorted list 
+# you can call the function like this
+# Sotring = Sort_metadata()
+# Sotring.sort_data(attr_list,sort_values)
+
+
 
 class Sort_metadata():
     def sort_data (self,attr_list,sort_value):
