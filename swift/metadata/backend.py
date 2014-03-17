@@ -517,6 +517,18 @@ class MetadataBroker(DatabaseBroker):
         #     return (row['object_count'] in (None, '', 0, '0')) and \
         #         (float(row['delete_timestamp']) > float(row['put_timestamp']))
 
+    def empty(self):
+        """
+        Check if the Metadata DB is empty.
+
+        :returns: True if the database has no metadata.
+        """
+        self._commit_puts_stale_ok()
+        with self.get() as conn:
+            row = conn.execute(
+                'SELECT account_container_count from account_metadata').fetchone()
+            return (row[0] == 0)
+
 #converts query return into a dictionary
 def dict_factory(cursor, row):
     d = {}
