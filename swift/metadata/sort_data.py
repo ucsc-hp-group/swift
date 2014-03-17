@@ -3,6 +3,9 @@ import operator
 
 # this calss will sort an attribute in a given list, and then return the sorted list 
 # you can call the function like this
+#attr_list = [{"/AUTH_admin": {"account_name": "AUTH_admin","value1":"bb"}}, {"/AUTH_admin/testDir/cat.jpg": {\
+# "object_name": "cat.jpg","value1":"bab"}}, {"/AUTH_admin/testDir/dog.jpg": {"object_name": "dog.jpg","value1":"bba"}}]
+#sort_values = "object_name"
 # Sotring = Sort_metadata()
 # Sotring.sort_data(attr_list,sort_values)
 
