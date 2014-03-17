@@ -8,15 +8,56 @@ from swift.common.utils import normalize_timestamp
 from swift.metadata.backend import MetadataBroker
 
 class TestMetadataBroker(unittest.TestCase):
-    #ef setUp(self):
-     #   broker = MetadataBroker
 
-    #def tearDown(self):
+    def test_creation(self):
+        # Test MetadataBroker.__init__
+        broker = MetadataBroker(':memory:')
+        self.assertEqual(broker.db_file, ':memory:')
+        got_exc = False
+        try:
+            with broker.get() as conn:
+                pass
+        except Exception:
+            got_exc = True
+        self.assert_(got_exc)
+        broker.initialize(normalize_timestamp('1'))
+        with broker.get() as conn:
+            curs = conn.cursor()
+            curs.execute('SELECT 1')
+            self.assertEqual(curs.fetchall()[0][0], 1)
+    
+    def test_exception(self):
+        # Test MetadataBroker throwing a conn away after exception
+        first_conn = None
+        broker = MetadataBroker(':memory:')
+        broker.initialize(normalize_timestamp('1'))
+        with broker.get() as conn:
+            first_conn = conn
+        try:
+            with broker.get() as conn:
+                self.assertEqual(first_conn, conn)
+                raise Exception('OMG')
+        except Exception:
+            pass
+        self.assert_(broker.conn is None)
 
     '''
-    def test_exception(self):
-
     def test_empty(self):
+        # Test AccountBroker.empty
+        broker = MetadataBroker(':memory:')
+        broker.initialize(normalize_timestamp('1'))
+        self.assert_(broker.empty())
+
+        #todo: put metadata in
+        broker.put_container('o', normalize_timestamp(time()), 0, 0, 0)
+        self.assert_(not broker.empty())
+        sleep(.00001)
+
+        #todo: remove
+        broker.put_container('o', 0, normalize_timestamp(time()), 0, 0)
+        self.assert_(broker.empty())
+
+    def get_attributes_query(self, acc, con, obj, attrs):
 
     def test_query_with_attrs(self):
 
