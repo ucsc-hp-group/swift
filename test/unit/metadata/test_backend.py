@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from swift.account.backend import AccountBroker
 from swift.common.utils import normalize_timestamp
+from swift.metadata.backend import MetadataBroker
 
 class TestMetadataBroker(unittest.TestCase):
 
