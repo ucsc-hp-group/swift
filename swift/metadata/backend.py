@@ -18,7 +18,18 @@ from swift.common.utils import normalize_timestamp
 from swift.common.db import DatabaseBroker
 from swift.common.utils import json
 
+import os, time, re, errno, sqlite3
+from uuid import uuid4
+from swift.common.utils import normalize_timestamp, lock_parent_directory
+from swift.common.db import DatabaseBroker, DatabaseConnectionError, \
+    PENDING_CAP, PICKLE_PROTOCOL, utf8encode
 
+import cPickle as pickle
+
+from swift.metadata.utils import build_insert_sql
+from swift.common.utils import json
+
+# Interface with metadata database
 class MetadataBroker(DatabaseBroker):
 
     type = 'metadata'
@@ -437,10 +448,6 @@ class MetadataBroker(DatabaseBroker):
         # table = re.sub(r' ','',re.split(
         #     r'WHERE',re.split(r'FROM',sql)[1])[0])
 
-        # # Normalize ANDs, and split query string by that pattern
-        # tmp_queries = re.sub(r"[aA][nN][dD]", "AND", queries)
-        # query_list  = re.split(r"AND", tmp_queries)
-        # clauses     = []
 
         # # Build clause list
         # for query in query_list:
@@ -550,6 +557,16 @@ class MetadataBroker(DatabaseBroker):
             return True
         self._commit_puts_stale_ok()
         return False
+        # with self.get() as conn:
+        #     query = '''
+        #         SELECT put_timestamp, delete_timestamp, object_count
+        #         FROM %s_metadata
+        #     ''' % (mdtable.split('_')[0])
+        #     row = conn.execute(query).fetchone()
+        #     if timestamp and row['delete_timestamp'] > timestamp:
+        #         return False
+        #     return (row['object_count'] in (None, '', 0, '0')) and \
+        #         (float(row['delete_timestamp']) > float(row['put_timestamp']))
 
 
 #converts query return into a dictionary

@@ -24,6 +24,8 @@ from swift.metadata.backend import MetadataBroker
 
 
 class TestMetadataBroker(unittest.TestCase):
+    #ef setUp(self):
+     #   broker = MetadataBroker
 
     def test_creation(self):
         # Test MetadataBroker.__init__
@@ -57,6 +59,7 @@ class TestMetadataBroker(unittest.TestCase):
             pass
         self.assert_(broker.conn is None)
 
+    '''
     def test_empty(self):
         # Test AccountBroker.empty
         broker = MetadataBroker(':memory:')
