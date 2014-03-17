@@ -18,7 +18,7 @@ from random import random
 from swift.account import server as account_server
 from swift.account.backend import AccountBroker
 from swift.common.utils import get_logger, audit_location_generator, \
-    config_true_value
+    config_true_value, json
 from swift.common.daemon import Daemon
 from eventlet import Timeout
 from swift.common.SendData import Sender

@@ -18,19 +18,7 @@ from swift.common.utils import normalize_timestamp
 from swift.common.db import DatabaseBroker
 from swift.common.utils import json
 
-import os, time, re, errno, sqlite3
-from uuid import uuid4
-from swift.common.utils import normalize_timestamp, lock_parent_directory
-from swift.common.db import DatabaseBroker, DatabaseConnectionError, \
-    PENDING_CAP, PICKLE_PROTOCOL, utf8encode
 
-import cPickle as pickle
-
-from swift.metadata.utils import build_insert_sql
-from swift.common.utils import json
-
-
-# Interface with metadata database
 class MetadataBroker(DatabaseBroker):
 
     type = 'metadata'
@@ -142,7 +130,8 @@ class MetadataBroker(DatabaseBroker):
         '''
 
         # Build and execute query for each requested insertion
-        formatted_query = query % (uri, key, value, normalize_timestamp(time.time()))
+        formatted_query = \
+            query % (uri, key, value, normalize_timestamp(time.time()))
         conn.execute(formatted_query)
 
     # Data insertion methods
@@ -183,7 +172,8 @@ class MetadataBroker(DatabaseBroker):
                 )
                 for custom in item:
                     if(custom.startswith("account_meta")):
-                        self.insert_custom_md(conn, item['account_uri'],custom,item[custom])
+                        self.insert_custom_md(
+                            conn, item['account_uri'], custom, item[custom])
                 conn.execute(formatted_query)
             conn.commit()
 
@@ -208,7 +198,9 @@ class MetadataBroker(DatabaseBroker):
                     container_bytes_used
                 )
                 VALUES (
-                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s",
                     "%s", "%s", "%s"
                 )
                 ;
@@ -234,7 +226,8 @@ class MetadataBroker(DatabaseBroker):
                 )
                 for custom in item:
                     if(custom.startswith("container_meta")):
-                        self.insert_custom_md(conn, item['container_uri'],custom,item[custom])
+                        self.insert_custom_md(
+                            conn, item['container_uri'], custom, item[custom])
                 conn.execute(formatted_query)
             conn.commit()
 
@@ -274,7 +267,7 @@ class MetadataBroker(DatabaseBroker):
                 ) VALUES (
                     "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
                     "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
-                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s" 
+                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s"
                 )
                 ;
             '''
@@ -313,11 +306,15 @@ class MetadataBroker(DatabaseBroker):
                 )
                 for custom in item:
                     if(custom.startswith("object_meta")):
-                        self.insert_custom_md(conn, item['object_uri'],custom,item[custom])
+                        self.insert_custom_md(
+                            conn, item['object_uri'], custom, item[custom])
                 conn.execute(formatted_query)
             conn.commit()
 
     def getAll(self):
+        """
+        Dump everything
+        """
         with self.get() as conn:
             conn.row_factory = dict_factory
             cur = conn.cursor()
@@ -330,129 +327,177 @@ class MetadataBroker(DatabaseBroker):
 
         return ''.join([
             json.dumps(obj_data), "\n\n", json.dumps(con_data), "\n\n",
-            json.dumps(acc_data) 
+            json.dumps(acc_data)
         ])
 
     # URI Attributes Parser
     def get_attributes_query(self, acc, con, obj, attrs):
-        
+        """
+        This query starts off the query string by adding the Attributes
+        to be returned in the SELECT statement.
+        Also handles scoping by passing in the scope info:
+
+            If we are in object scope, the only things visible
+            are this object, the parent container, and the parent
+            account.
+
+            If in container scope. All objects in the container are
+            visible, this container, and the parent account.
+
+            If in account scope, All objects and containers in the scope
+            are visible, as well as this account.
+        """
         # Catch bad query
         if attrsStartWith(attrs) == "BAD":
             return "BAD"
 
-        # Get information from the current object
-        if obj != "" and obj != None:
-            Ouri = "'/" + acc + "/" +  con + "/" + obj + "'"
-            Curi = "'/" + acc + "/" +  con + "'"
+        # JOIN all our tables together so the API can do queries
+        # across tables.
+        fromStr = """account_metadata
+            INNER JOIN container_metadata
+            ON account_name=container_account_name
+            INNER JOIN object_metadata
+            ON account_name=object_account_name
+            AND container_name=object_container_name"""
+
+        # Object Scope
+        if obj != "" and obj is not None:
+            Ouri = "'/" + acc + "/" + con + "/" + obj + "'"
+            Curi = "'/" + acc + "/" + con + "'"
             Auri = "'/" + acc + "'"
+            domain = attrsStartWith(attrs)
+            if domain == 'object':
+                uri = Ouri
+            elif domain == 'container':
+                uri = Curi
+            else:
+                uri = Auri
+            return """
+                SELECT distinct %s,%s_uri
+                FROM %s
+                WHERE %s_uri=%s
+            """ % (attrs, domain, fromStr, domain, uri)
 
-            if 'all_object_attrs' in attrs.split(','):
-                return """
-                    SELECT * 
-                    FROM object_metadata 
-                    WHERE object_uri=%s
-                """ % Ouri
-
-            elif attrsStartWith(attrs) == 'object':
-                return """
-                    SELECT %s,object_uri 
-                    FROM object_metadata 
-                    WHERE object_uri=%s
-                """ % (attrs, Ouri)
-
-            elif attrsStartWith(attrs) == 'container':
-                return """
-                    SELECT %s,container_uri 
-                    FROM container_metadata 
-                    WHERE container_uri=%s
-                """ % (attrs, Curi)
-
-            elif attrsStartWith(attrs) == 'account':
-                return """
-                    SELECT %s,account_uri 
-                    FROM account_metadata 
-                    WHERE account_uri=%s
-                """ % (attrs, Auri)
-
-        # Get information from the current container
-        elif con != "" and con != None: 
-            uri = "'/" + acc + "/" +  con + "'"
+        # Container Scope
+        elif con != "" and con is not None:
+            uri = "'/" + acc + "/" + con + "'"
             Auri = "'/" + acc + "'"
-            if 'all_container_attrs' in attrs.split(','):
+            if attrsStartWith(attrs) == 'object':
                 return """
-                    SELECT * 
-                    FROM container_metadata 
-                    WHERE container_uri=%s
-                """ % uri
-
-            elif attrsStartWith(attrs) == 'object':
-                return """
-                    SELECT %s,object_uri 
-                    FROM object_metadata 
+                    SELECT distinct %s,object_uri
+                    FROM object_metadata
                     WHERE object_container_name=%s
-                """ % (attrs, "'"+con+"'")
+                """ % (attrs, "'" + con + "'")
 
             elif attrsStartWith(attrs) == 'container':
                 return """
-                    SELECT %s,container_uri 
-                    FROM container_metadata 
+                    SELECT distinct %s,container_uri
+                    FROM %s
                     WHERE container_uri=%s
-                """ % (attrs, uri)
+                """ % (attrs, fromStr, uri)
 
             elif attrsStartWith(attrs) == 'account':
                 return """
-                    SELECT %s,account_uri 
-                    FROM account_metadata 
+                    SELECT distinct %s,account_uri
+                    FROM %s
                     WHERE account_uri=%s
-                """ % (attrs, Auri)
+                """ % (attrs, fromStr, Auri)
 
-        # Get information from the current account
-        elif acc != "" and acc != None:
+        # Account scope
+        elif acc != "" and acc is not None:
             uri = "'/" + acc + "'"
-            if 'all_account_attrs' in attrs.split(','):
+            if attrsStartWith(attrs) == 'object':
                 return """
-                    SELECT * 
-                    FROM account_metadata 
-                    WHERE account_uri=%s
-                """ % uri
-
-            elif attrsStartWith(attrs) == 'object':
-                return """
-                    SELECT %s,object_uri 
-                    FROM object_metadata 
-                    WHERE object_account_name=%s 
-                """ % (attrs, "'"+acc+"'")
+                    SELECT distinct %s,object_uri
+                    FROM %s
+                    WHERE object_account_name='%s'
+                """ % (attrs, fromStr, acc)
 
             elif attrsStartWith(attrs) == 'container':
                 return """
-                    SELECT %s,container_uri 
-                    FROM container_metadata 
-                    WHERE container_account_name=%s
-                """ % (attrs, "'"+acc+"'")
+                    SELECT distinct %s,container_uri
+                    FROM %s
+                    WHERE container_account_name='%s'
+                """ % (attrs, fromStr, acc)
 
             elif attrsStartWith(attrs) == 'account':
                 return """
-                    SELECT %s,account_uri 
-                    FROM account_metadata 
+                    SELECT distinct %s,account_uri
+                    FROM %s
                     WHERE account_uri=%s
-                """ % (attrs, uri)
+                """ % (attrs, fromStr, uri)
 
     # URI Query parser
     def get_uri_query(self, sql, queries):
         '''
         Takes the output of get_attributes_query() as input (sql), and adds
-        additional query information based on ?query=<> from the URI 
+        additional query information based on ?query=<> from the URI
         '''
-        
-        table = re.sub(r' ','',re.split(r'WHERE',re.split(r'FROM',sql)[1])[0])
 
-        return re.escape(sql + " AND (" + queries + ")")
+        # table = re.sub(r' ','',re.split(
+        #     r'WHERE',re.split(r'FROM',sql)[1])[0])
 
+        # # Normalize ANDs, and split query string by that pattern
+        # tmp_queries = re.sub(r"[aA][nN][dD]", "AND", queries)
+        # query_list  = re.split(r"AND", tmp_queries)
+        # clauses     = []
 
-    def get_custom_attributes_query(self, customAttrs):
-        return ""
+        # # Build clause list
+        # for query in query_list:
+        #     if cross_reference_md_schema(query, table):
+        #         clauses.append(query)
+        #     else:
+        #         clauses.append(None)
+
+        # # Ensure the query list is valid
+        # if None in clauses:
+        #     pass
+        #     TODO: raise hackles
+
+        # Return subqueries appended to given query
+        # return sql + ''.join([
+        #         ' AND ' + clause
+        #     if index > 0
+        #     else
+        #         clause
+        #     for index, clause in enumerate(clauses)
+        # ])
+
+    def custom_attributes_query(self, customAttrs, sysMetaList):
+        """
+        This function executes a query to get custom Attributes
+        and merge them into the list of dictionaries which is created
+        before this function is called. Only merges attributes in the
+        customAttrs list passed in.
+        """
+        with self.get() as conn:
+            for x in sysMetaList:
+                uri = x.keys()[0]
+                query = """SELECT custom_key, custom_value
+                FROM custom_metadata
+                WHERE uri='%s'
+                """ % uri
+                cur = conn.cursor()
+                cur.execute(query)
+                l = cur.fetchall()
+                for d in l:
+                    if d['custom_key'] in customAttrs.split(','):
+                        x[uri][d['custom_key']] = d['custom_value']
+        return sysMetaList
 
     def execute_query(self, query, acc, con, obj, includeURI):
+        """
+        Execute the main query.
+        Executes a query which has been built
+        up before this call in server.py
+        The row_factory makes dictionaries of
+        {column : entry} per row returned.
+        We add the URI of the `thing` found in the query
+        as a key in a new dictionary,
+        with the value the previous dictionary
+        Each 'row' is now a dictionary in a list
+        This list of dictonaries is returned
+        """
         with self.get() as conn:
             conn.row_factory = dict_factory
             cur = conn.cursor()
@@ -481,15 +526,15 @@ class MetadataBroker(DatabaseBroker):
                         pass
                 else:
                     try:
-                        retList.append({row['object_uri'] : row})
+                        retList.append({row['object_uri']: row})
                     except KeyError:
                         pass
                     try:
-                        retList.append({row['container_uri'] : row})
+                        retList.append({row['container_uri']: row})
                     except KeyError:
                         pass
                     try:
-                        retList.append({row['account_uri'] : row})
+                        retList.append({row['account_uri']: row})
                     except KeyError:
                         pass
             return retList
@@ -497,36 +542,15 @@ class MetadataBroker(DatabaseBroker):
     def is_deleted(self, mdtable, timestamp=None):
         '''
         Determine whether a DB is considered deleted
-        :param mdtable: a string representing the relevant object type (account, 
-            container, object)
+        :param mdtable: a string representing the relevant object type
+            (account, container, object)
         :returns: True if the DB is considered deleted, False otherwise
         '''
         if self.db_file != ':memory:' and not os.path.exists(self.db_file):
             return True
         self._commit_puts_stale_ok()
         return False
-        # with self.get() as conn:
-        #     query = '''
-        #         SELECT put_timestamp, delete_timestamp, object_count
-        #         FROM %s_metadata
-        #     ''' % (mdtable.split('_')[0])
-        #     row = conn.execute(query).fetchone()
-        #     if timestamp and row['delete_timestamp'] > timestamp:
-        #         return False
-        #     return (row['object_count'] in (None, '', 0, '0')) and \
-        #         (float(row['delete_timestamp']) > float(row['put_timestamp']))
 
-    def empty(self):
-        """
-        Check if the Metadata DB is empty.
-
-        :returns: True if the database has no metadata.
-        """
-        self._commit_puts_stale_ok()
-        with self.get() as conn:
-            row = conn.execute(
-                'SELECT account_container_count from account_metadata').fetchone()
-            return (row[0] == 0)
 
 #converts query return into a dictionary
 def dict_factory(cursor, row):
@@ -535,15 +559,17 @@ def dict_factory(cursor, row):
         d[col[0]] = row[idx]
     return d
 
+
 # Add URI to dict as `label`
 def attachURI(metaDict, acc, con, obj):
-    if obj != "" and obj != None:
-        uri = '/'.join(['',acc,con,obj])
-    elif con != "" and con != None :
-        uri = '/'.join(['',acc,con])
+    if obj != "" and obj is not None:
+        uri = '/'.join(['', acc, con, obj])
+    elif con != "" and con is not None:
+        uri = '/'.join(['', acc, con])
     else:
         uri = '/' + acc
     return {uri: metaDict}
+
 
 #checks if every attribute in the list starts with the correct.
 #returns the thing it begins with (object/container/account)

@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os, json
 from swift.common.swob import Request, Response
 from eventlet.green.httplib import HTTPConnection
-
+from urllib import urlencode
 
 class MetaDataMiddleware(object):
     """
@@ -40,14 +41,12 @@ class MetaDataMiddleware(object):
 
     def BAD(self, req):
         """Returns a 400 for bad request"""
-        return Response(request=req, status=400,
-                        body="Metadata version bad\n",
-                        content_type="text/plain")
+        return Response(request=req, status=400, body="Metadata version bad\n", content_type="text/plain")
 
     def __call__(self, env, start_response):
         req = Request(env)
         try:
-            if 'metadata' in req.params:
+            if 'metadata' in req.params: 
                 if req.params['metadata'] == 'v1':
                     handler = self.GET
                     return handler(req)(env, start_response)

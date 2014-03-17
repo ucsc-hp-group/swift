@@ -13,20 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
-from swift.common.http import HTTP_INTERNAL_SERVER_ERROR
+from swift.common.ring import Ring
+from swift.common.http import is_success, HTTP_INTERNAL_SERVER_ERROR
 from swift.common.utils import json
 from eventlet import Timeout
-from eventlet.green.httplib import HTTPConnection
-
-
+from eventlet.green.httplib import HTTPConnection, HTTPResponse
 class Sender():
 
     def __init__(self, conf):
 
         self.conn_timeout = float(conf.get('conn_timeout', 3))
 
-    def sendData(self, metaList, data_type, server_ip, server_port):
+    def sendData (self, metaList, data_type, server_ip, server_port):
         ip = server_ip
         port = server_port
         updatedData = json.dumps(metaList)
