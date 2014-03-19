@@ -50,10 +50,7 @@ class ObjectCrawler(Daemon):
             try:
                 self.object_sweep()
             except (Exception, Timeout):
-                with open(
-                        "/opt/stack/data/swift/logs/obj-crawler.log", "a+"
-                ) as f:
-                        f.write("Exception on object_sweep\n")
+                pass
             time.sleep(self.interval)
 
     def run_once(self, *args, **kwargs):

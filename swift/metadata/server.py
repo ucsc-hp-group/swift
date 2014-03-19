@@ -285,8 +285,6 @@ class MetadataController(object):
                 request=req,
                 content_type='text/plain'
             )
-        with open("/opt/stack/data/swift/logs/metaserver.log", "a+") as f:
-            f.write(req.headers['user_agent'] + req.body + "\n")
         md_type = req.headers['user-agent']
         md_data = json.loads(req.body)
 
