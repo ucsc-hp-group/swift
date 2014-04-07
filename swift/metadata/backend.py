@@ -14,7 +14,6 @@
 # limitations under the License.
 import os
 import time
-import re
 from swift.common.utils import normalize_timestamp
 from swift.common.db import DatabaseBroker
 from swift.common.utils import json
@@ -436,7 +435,8 @@ class MetadataBroker(DatabaseBroker):
         '''
         return sql + " AND (" + queries + ")"
 
-    def custom_attributes_query(self, customAttrs, sysMetaList):
+    def custom_attributes_query(self, customAttrs, sysMetaList,
+                                all_obj_meta, all_con_meta, all_acc_meta):
         """
         This function executes a query to get custom Attributes
         and merge them into the list of dictionaries which is created
@@ -454,8 +454,14 @@ class MetadataBroker(DatabaseBroker):
                 cur.execute(query)
                 l = cur.fetchall()
                 for d in l:
-                    if d['custom_key'] in customAttrs.split(','):
-                        x[uri][d['custom_key']] = d['custom_value']
+                    if (d['custom_key'] in customAttrs.split(',')) or \
+                        (all_obj_meta and
+                            d['custom_key'].startswith("object_meta")) or \
+                        (all_con_meta and
+                            d['custom_key'].startswith("container_meta")) or \
+                        (all_acc_meta and
+                            d['custom_key'].startswith("account_meta")):
+                                x[uri][d['custom_key']] = d['custom_value']
         return sysMetaList
 
     def execute_query(self, query, acc, con, obj, includeURI):
@@ -533,7 +539,8 @@ class MetadataBroker(DatabaseBroker):
         self._commit_puts_stale_ok()
         with self.get() as conn:
             row = conn.execute(
-                'SELECT account_container_count from account_metadata').fetchone()
+                'SELECT account_container_count from account_metadata'). \
+                fetchone()
             return (row[0] == 0)
 
 

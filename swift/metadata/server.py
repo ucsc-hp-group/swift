@@ -295,7 +295,8 @@ class MetadataController(object):
                     objQuery, acc, con, obj,
                     'object_uri' in attrs.split(',')))
 
-            ret = broker.custom_attributes_query(customAttrs, ret)
+            ret = broker.custom_attributes_query(
+                customAttrs, ret, all_obj_meta, all_con_meta, all_acc_meta)
 
             ret = json.dumps(ret)
             status = 200
