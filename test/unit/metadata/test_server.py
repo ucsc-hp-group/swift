@@ -148,7 +148,7 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(str(metaReturned['object_content_length']), '42')
         self.assertEquals(metaReturned['object_content_encoding'], 'gzip')
         self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
 
         testDict = testList[1]
         self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
@@ -165,7 +165,7 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(str(metaReturned['object_content_length']), '42')
         self.assertEquals(metaReturned['object_content_encoding'], 'gzip')
         self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
 
         testDict = testList[2]
         self.assert_('/TEST_acc1/TEST_con2/TEST_obj3' in testDict)
@@ -182,7 +182,7 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(str(metaReturned['object_content_length']), '42')
         self.assertEquals(metaReturned['object_content_encoding'], 'gzip')
         self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
 
     def test_GET_CONscope_objAttrs_metadata(self):
         """
@@ -212,7 +212,7 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(str(metaReturned['object_content_length']), '42')
         self.assertEquals(metaReturned['object_content_encoding'], 'gzip')
         self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
 
         testDict = testList[1]
         self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
@@ -229,7 +229,7 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(str(metaReturned['object_content_length']), '42')
         self.assertEquals(metaReturned['object_content_encoding'], 'gzip')
         self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
 
     def test_GET_OBJscope_objAttrs_metadata(self):
         """
@@ -260,7 +260,7 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(str(metaReturned['object_content_length']), '42')
         self.assertEquals(metaReturned['object_content_encoding'], 'gzip')
         self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
 
     def test_GET_ACCscope_conAttrs_metadata(self):
         """
@@ -444,57 +444,12 @@ class TestMetadataController(unittest.TestCase):
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
         self.assert_(len(testList) == 6)
-        testDict = testList[0]
-        self.assert_('/TEST_acc1' in testDict)
-        metaReturned = testDict['/TEST_acc1']
-        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
-        self.assertEquals(metaReturned['account_bytes_used'], 3342)
-        self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
-
-        testDict = testList[1]
-        self.assert_('/TEST_acc1/TEST_con1' in testDict)
-        metaReturned = testDict['/TEST_acc1/TEST_con1']
-        self.assertEquals(
-            metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
-
-        self.assertEquals(metaReturned['container_bytes_used'], 3342)
-        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'], 'CUSTOM')
-
-        testDict = testList[2]
-        self.assert_('/TEST_acc1/TEST_con2' in testDict)
-        metaReturned = testDict['/TEST_acc1/TEST_con2']
-        self.assertEquals(
-            metaReturned['container_uri'], '/TEST_acc1/TEST_con2')
-
-        self.assertEquals(metaReturned['container_bytes_used'], 3342)
-        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'], 'CUSTOM')
-
-        testDict = testList[3]
-        self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
-        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
-        self.assertEquals(
-            metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
-
-        self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
-
-        testDict = testList[4]
-        self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
-        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
-        self.assertEquals(
-            metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
-
-        self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
-
-        testDict = testList[5]
-        self.assert_('/TEST_acc1/TEST_con2/TEST_obj3' in testDict)
-        metaReturned = testDict['/TEST_acc1/TEST_con2/TEST_obj3']
-        self.assertEquals(
-            metaReturned['object_uri'], '/TEST_acc1/TEST_con2/TEST_obj3')
-
-        self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+        self.acc1helper(testList[0])
+        self.con1helper(testList[1])
+        self.con2helper(testList[2])
+        self.obj1helper(testList[3])
+        self.obj2helper(testList[4])
+        self.obj3helper(testList[5])
 
     def test_GET_CONscope_mixedAttrs(self):
         """
@@ -512,39 +467,14 @@ class TestMetadataController(unittest.TestCase):
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
         self.assert_(len(testList) == 4)
-        testDict = testList[0]
-        self.assert_('/TEST_acc1' in testDict)
-        metaReturned = testDict['/TEST_acc1']
-        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
-        self.assertEquals(metaReturned['account_bytes_used'], 3342)
-        self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
 
-        testDict = testList[1]
-        self.assert_('/TEST_acc1/TEST_con1' in testDict)
-        metaReturned = testDict['/TEST_acc1/TEST_con1']
-        self.assertEquals(
-            metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+        self.acc1helper(testList[0])
 
-        self.assertEquals(metaReturned['container_bytes_used'], 3342)
-        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'], 'CUSTOM')
+        self.con1helper(testList[1])
 
-        testDict = testList[2]
-        self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
-        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
-        self.assertEquals(
-            metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
+        self.obj1helper(testList[2])
 
-        self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
-
-        testDict = testList[3]
-        self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
-        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
-        self.assertEquals(
-            metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
-
-        self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+        self.obj2helper(testList[3])
 
     def test_GET_OBJscope_mixedAttrs(self):
         """
@@ -563,14 +493,51 @@ class TestMetadataController(unittest.TestCase):
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
         self.assert_(len(testList) == 3)
-        testDict = testList[0]
+
+        self.acc1helper(testList[0])
+
+        self.con1helper(testList[1])
+
+        self.obj1helper(testList[2])
+
+    def test_superset_all(self):
+        """
+        Tests all_attrs
+        """
+        attrs = "all_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 6)
+
+        self.acc1helper(testList[0])
+
+        self.con1helper(testList[1])
+
+        self.con2helper(testList[2])
+
+        self.obj1helper(testList[3])
+
+        self.obj2helper(testList[4])
+
+        self.obj3helper(testList[5])
+
+
+    ########################
+    #   HELPER FUNCTIONS   #
+    ########################
+
+    def acc1helper(self, testDict):
         self.assert_('/TEST_acc1' in testDict)
         metaReturned = testDict['/TEST_acc1']
         self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
         self.assertEquals(metaReturned['account_bytes_used'], 3342)
         self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
 
-        testDict = testList[1]
+    def con1helper(self, testDict):
         self.assert_('/TEST_acc1/TEST_con1' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1']
         self.assertEquals(
@@ -579,18 +546,42 @@ class TestMetadataController(unittest.TestCase):
         self.assertEquals(metaReturned['container_bytes_used'], 3342)
         self.assertEquals(metaReturned['container_meta_TESTCUSTOM'], 'CUSTOM')
 
-        testDict = testList[2]
+    def con2helper(self, testDict):
+        self.assert_('/TEST_acc1/TEST_con2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con2']
+        self.assertEquals(
+            metaReturned['container_uri'], '/TEST_acc1/TEST_con2')
+
+        self.assertEquals(metaReturned['container_bytes_used'], 3342)
+        self.assertEquals(metaReturned['container_meta_TESTCUSTOM'], 'CUSTOM')
+
+    def obj1helper(self, testDict):
         self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
         self.assertEquals(
             metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
 
         self.assertEquals(metaReturned['object_content_language'], 'en')
-        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'COOL')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
 
-    ########################
-    #   HELPER FUNCTIONS   #
-    ########################
+    def obj2helper(self, testDict):
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
+        self.assertEquals(
+            metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
+
+        self.assertEquals(metaReturned['object_content_language'], 'en')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
+
+    def obj3helper(self, testDict):
+        self.assert_('/TEST_acc1/TEST_con2/TEST_obj3' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con2/TEST_obj3']
+        self.assertEquals(
+            metaReturned['object_uri'], '/TEST_acc1/TEST_con2/TEST_obj3')
+
+        self.assertEquals(metaReturned['object_content_language'], 'en')
+        self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
+
     def getTestObjDict(self, accNum, conNum, objNum):
         metadata = {}
         uri = "/TEST_acc" + str(accNum) + "/TEST_con" + str(conNum) + \
@@ -626,7 +617,7 @@ class TestMetadataController(unittest.TestCase):
         metadata['object_origin'] = 'NULL'
         metadata['object_access_control_request_method'] = 'NULL'
         metadata['object_access_control_request_headers'] = 'NULL'
-        metadata['object_meta_TESTCUSTOM'] = 'COOL'
+        metadata['object_meta_TESTCUSTOM'] = 'CUSTOM'
         return metadata
 
     def getTestConDict(self, accNum, conNum):

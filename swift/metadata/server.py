@@ -476,7 +476,7 @@ def eval_superset(attrs):
     be used later in the query to the
     custom table
 
-    Returns the expanded attrs as a string.
+    Returns the expanded attrs as a string, along with the bool vals.
     """
     expanded = set()
     cust_obj = False
