@@ -267,9 +267,22 @@ class MetadataController(object):
 
         attrs, all_obj_meta, all_con_meta, all_acc_meta = \
             eval_superset(attrs.split(","))
-        if self.check_attrs(attrs, acc, con, obj):
+        if self.check_attrs(attrs, acc, con, obj) or attrs == '':
             accAttrs, conAttrs, objAttrs, superAttrs, customAttrs = \
                 split_attrs_by_scope(attrs)
+
+            """
+            If we have a thing from which we don't request any sys attrs
+            Then we need to add its uri so that it appears in the list
+            returned from the query. After we query for custom attrs,
+            we need to delete any thing that is empty.
+            """
+            if all_obj_meta and objAttrs == "":
+                objAttrs = "object_uri"
+            if all_con_meta and conAttrs == "":
+                conAttrs = "container_uri"
+            if all_acc_meta and accAttrs == "":
+                accAttrs = "account_uri"
 
             accQuery = broker.get_attributes_query(acc, con, obj, accAttrs)
             conQuery = broker.get_attributes_query(acc, con, obj, conAttrs)
@@ -297,6 +310,11 @@ class MetadataController(object):
 
             ret = broker.custom_attributes_query(
                 customAttrs, ret, all_obj_meta, all_con_meta, all_acc_meta)
+
+            """
+            Do the deletion thing mentioned above
+            """
+            ret = [x for x in ret if x[x.keys()[0]] != {}]
 
             ret = json.dumps(ret)
             status = 200

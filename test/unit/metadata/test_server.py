@@ -15,21 +15,15 @@
 
 import errno
 import os
-import mock
 import unittest
 import time
 from shutil import rmtree
-from StringIO import StringIO
-
-import simplejson
-import xml.dom.minidom
 
 from swift.common.swob import Request
-# from swift.account.server import AccountController, ACCOUNT_LISTING_LIMIT
+
 from swift.metadata.server import MetadataController
 
-from swift.common.utils import normalize_timestamp, replication, public, json
-from swift.common.request_helpers import get_sys_meta_prefix
+from swift.common.utils import normalize_timestamp, json
 
 Aattrs = (
     "account_uri,account_name,account_last_activity_time,"
@@ -444,12 +438,12 @@ class TestMetadataController(unittest.TestCase):
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
         self.assert_(len(testList) == 6)
-        self.acc1helper(testList[0])
-        self.con1helper(testList[1])
-        self.con2helper(testList[2])
-        self.obj1helper(testList[3])
-        self.obj2helper(testList[4])
-        self.obj3helper(testList[5])
+        self.acc1helper(testList[0], True)
+        self.con1helper(testList[1], True)
+        self.con2helper(testList[2], True)
+        self.obj1helper(testList[3], True)
+        self.obj2helper(testList[4], True)
+        self.obj3helper(testList[5], True)
 
     def test_GET_CONscope_mixedAttrs(self):
         """
@@ -468,13 +462,10 @@ class TestMetadataController(unittest.TestCase):
         testList = json.loads(resp2.body)
         self.assert_(len(testList) == 4)
 
-        self.acc1helper(testList[0])
-
-        self.con1helper(testList[1])
-
-        self.obj1helper(testList[2])
-
-        self.obj2helper(testList[3])
+        self.acc1helper(testList[0], True)
+        self.con1helper(testList[1], True)
+        self.obj1helper(testList[2], True)
+        self.obj2helper(testList[3], True)
 
     def test_GET_OBJscope_mixedAttrs(self):
         """
@@ -494,15 +485,14 @@ class TestMetadataController(unittest.TestCase):
         testList = json.loads(resp2.body)
         self.assert_(len(testList) == 3)
 
-        self.acc1helper(testList[0])
+        self.acc1helper(testList[0], True)
+        self.con1helper(testList[1], True)
+        self.obj1helper(testList[2], True)
 
-        self.con1helper(testList[1])
-
-        self.obj1helper(testList[2])
-
-    def test_superset_all(self):
+    def test_superset_all_attrs_acc_scope(self):
         """
         Tests all_attrs
+        Gets everything in account's scope
         """
         attrs = "all_attrs"
         req = Request.blank(
@@ -513,75 +503,186 @@ class TestMetadataController(unittest.TestCase):
         testList = json.loads(resp.body)
         self.assertEquals(len(testList), 6)
 
-        self.acc1helper(testList[0])
+        self.acc1helper(testList[0], True)
+        self.con1helper(testList[1], True)
+        self.con2helper(testList[2], True)
+        self.obj1helper(testList[3], True)
+        self.obj2helper(testList[4], True)
+        self.obj3helper(testList[5], True)
 
-        self.con1helper(testList[1])
+    def test_superset_all_attrs_con_scope(self):
+        """
+        We should get back:
+            attrs from acc of con, the con, and all objects in con
+        """
+        attrs = "all_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 4)
 
-        self.con2helper(testList[2])
+        self.acc1helper(testList[0], True)
+        self.con1helper(testList[1], True)
+        self.obj1helper(testList[2], True)
+        self.obj2helper(testList[3], True)
 
-        self.obj1helper(testList[3])
+    def test_superset_all_attrs_obj_scope(self):
+        """
+        We should get back:
+            attrs from the obj's acc, the obj's con, the obj
+        """
+        attrs = "all_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 3)
 
-        self.obj2helper(testList[4])
+        self.acc1helper(testList[0], True)
+        self.con1helper(testList[1], True)
+        self.obj1helper(testList[2], True)
 
-        self.obj3helper(testList[5])
+    def test_superset_all_system_attrs(self):
+        attrs = "all_system_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 3)
 
+        self.acc1helper(testList[0], False)
+        self.con1helper(testList[1], False)
+        self.obj1helper(testList[2], False)
+
+    def test_superset_all_meta_attrs(self):
+        attrs = "all_meta_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 3)
+
+        self.acc1helperCustom(testList[0])
+        self.con1helperCustom(testList[1])
+        self.obj1helperCustom(testList[2])
 
     ########################
     #   HELPER FUNCTIONS   #
     ########################
 
-    def acc1helper(self, testDict):
+    """
+    For each of these acc/con/obj helper functions, we give the dictionary
+    to test and wether we want to test custom metadata or not.
+    Basically test wether the dictionary had the URI as key, and
+    then test if a system attribute is there and if we want
+    to test custom, then call a seperate function to do that
+    There needs to be seperate functions because we need to
+    test only custom attributes
+    """
+
+    def acc1helper(self, testDict, custom):
         self.assert_('/TEST_acc1' in testDict)
         metaReturned = testDict['/TEST_acc1']
         self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
         self.assertEquals(metaReturned['account_bytes_used'], 3342)
+        if custom:
+            self.acc1helperCustom(testDict)
+
+    def acc1helperCustom(self, testDict):
+        self.assert_('/TEST_acc1' in testDict)
+        metaReturned = testDict['/TEST_acc1']
         self.assertEquals(metaReturned['account_meta_TESTCUSTOM'], 'CUSTOM')
 
-    def con1helper(self, testDict):
+    def con1helper(self, testDict, custom):
         self.assert_('/TEST_acc1/TEST_con1' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1']
         self.assertEquals(
             metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
 
         self.assertEquals(metaReturned['container_bytes_used'], 3342)
+        if custom:
+            self.con1helperCustom(testDict)
+
+    def con1helperCustom(self, testDict):
+        self.assert_('/TEST_acc1/TEST_con1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1']
         self.assertEquals(metaReturned['container_meta_TESTCUSTOM'], 'CUSTOM')
 
-    def con2helper(self, testDict):
+    def con2helper(self, testDict, custom):
         self.assert_('/TEST_acc1/TEST_con2' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con2']
         self.assertEquals(
             metaReturned['container_uri'], '/TEST_acc1/TEST_con2')
 
         self.assertEquals(metaReturned['container_bytes_used'], 3342)
+        if custom:
+            self.con2helperCustom(testDict)
+
+    def con2helperCustom(self, testDict):
+        self.assert_('/TEST_acc1/TEST_con2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con2']
         self.assertEquals(metaReturned['container_meta_TESTCUSTOM'], 'CUSTOM')
 
-    def obj1helper(self, testDict):
+    def obj1helper(self, testDict, custom):
         self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
         self.assertEquals(
             metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
 
         self.assertEquals(metaReturned['object_content_language'], 'en')
+        if custom:
+            self.obj1helperCustom(testDict)
+
+    def obj1helperCustom(self, testDict):
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
         self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
 
-    def obj2helper(self, testDict):
+    def obj2helper(self, testDict, custom):
         self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
         self.assertEquals(
             metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
 
         self.assertEquals(metaReturned['object_content_language'], 'en')
+        if custom:
+            self.obj2helperCustom(testDict)
+
+    def obj2helperCustom(self, testDict):
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
         self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
 
-    def obj3helper(self, testDict):
+    def obj3helper(self, testDict, custom):
         self.assert_('/TEST_acc1/TEST_con2/TEST_obj3' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con2/TEST_obj3']
         self.assertEquals(
             metaReturned['object_uri'], '/TEST_acc1/TEST_con2/TEST_obj3')
 
         self.assertEquals(metaReturned['object_content_language'], 'en')
+        if custom:
+            self.obj3helpercustom(testDict)
+
+    def obj3helpercustom(self, testDict):
+        self.assert_('/TEST_acc1/TEST_con2/TEST_obj3' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con2/TEST_obj3']
         self.assertEquals(metaReturned['object_meta_TESTCUSTOM'], 'CUSTOM')
 
+    """
+    Create test dictionaries for putting into the test metadata db
+    """
     def getTestObjDict(self, accNum, conNum, objNum):
         metadata = {}
         uri = "/TEST_acc" + str(accNum) + "/TEST_con" + str(conNum) + \
