@@ -578,6 +578,123 @@ class TestMetadataController(unittest.TestCase):
         self.con1helperCustom(testList[1])
         self.obj1helperCustom(testList[2])
 
+    def test_superset_all_account_attrs(self):
+        attrs = "all_account_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 1)
+
+        self.acc1helper(testList[0], True)
+
+    def test_superset_all_account_system_attrs(self):
+        attrs = "all_account_system_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 1)
+
+        self.acc1helper(testList[0], False)
+
+    def test_superset_all_account_meta_attrs(self):
+        attrs = "all_account_meta_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 1)
+
+        self.acc1helperCustom(testList[0])
+
+    def test_superset_all_container_attrs(self):
+        attrs = "all_container_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 1)
+
+        self.con1helper(testList[0], True)
+
+    def test_superset_all_container_system_attrs(self):
+        attrs = "all_container_system_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 1)
+
+        self.con1helper(testList[0], False)
+
+    def test_superset_all_container_meta_attrs(self):
+        attrs = "all_container_meta_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 1)
+
+        self.con1helperCustom(testList[0])
+
+    def test_superset_all_object_attrs(self):
+        attrs = "all_object_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 1)
+
+        self.obj1helper(testList[0], True)
+
+    def test_superset_all_object_system_attrs(self):
+        attrs = "all_object_system_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 1)
+
+        self.obj1helper(testList[0], False)
+
+    def test_superset_all_object_meta_attrs(self):
+        attrs = "all_object_meta_attrs"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 1)
+
+        self.obj1helperCustom(testList[0])
+
     ########################
     #   HELPER FUNCTIONS   #
     ########################
