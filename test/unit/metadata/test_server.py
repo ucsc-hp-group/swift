@@ -695,6 +695,101 @@ class TestMetadataController(unittest.TestCase):
 
         self.obj1helperCustom(testList[0])
 
+
+    def test_no_attributes_in_request_obj_scope(self):
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 3)
+        testDict = testList[0]
+        self.assert_('/TEST_acc1' in testDict)
+        metaReturned = testDict['/TEST_acc1']
+        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
+
+        testDict = testList[1]
+        self.assert_('/TEST_acc1/TEST_con1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+
+        testDict = testList[2]
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
+
+    def test_no_attributes_in_request_con_scope(self):
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 4)
+
+        testDict = testList[0]
+        self.assert_('/TEST_acc1' in testDict)
+        metaReturned = testDict['/TEST_acc1']
+        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
+
+        testDict = testList[1]
+        self.assert_('/TEST_acc1/TEST_con1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+
+        testDict = testList[2]
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
+
+        testDict = testList[3]
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
+
+    def test_no_attributes_in_request_acc_scope(self):
+        req = Request.blank(
+            '/v1/TEST_acc1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('200'))
+        testList = json.loads(resp.body)
+        self.assertEquals(len(testList), 6)
+
+        testDict = testList[0]
+        self.assert_('/TEST_acc1' in testDict)
+        metaReturned = testDict['/TEST_acc1']
+        self.assertEquals(metaReturned['account_uri'], '/TEST_acc1')
+
+        testDict = testList[1]
+        self.assert_('/TEST_acc1/TEST_con1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+
+        testDict = testList[2]
+        self.assert_('/TEST_acc1/TEST_con2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con2']
+        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con2')
+
+        testDict = testList[3]
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
+
+        testDict = testList[4]
+        self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
+
+        testDict = testList[5]
+        self.assert_('/TEST_acc1/TEST_con2/TEST_obj3' in testDict)
+        metaReturned = testDict['/TEST_acc1/TEST_con2/TEST_obj3']
+        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con2/TEST_obj3')
+
     ########################
     #   HELPER FUNCTIONS   #
     ########################

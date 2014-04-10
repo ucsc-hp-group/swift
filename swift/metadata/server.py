@@ -253,17 +253,8 @@ class MetadataController(object):
         # if there is no attributes lists, include everything in scope
         # since no attributes passed in, there can be
         #  things from multiple levels of scope
-        # Things must come from multiple tables
-        # EX: Give me all metadata for `things` in
-        # account scope where timestamp < ~something~
-        elif obj != "" or obj is not None:
-            attrs = "object_uri, container_uri, account_uri"
-        elif con != "" and con is not None:
-            attrs = "container_uri, account_uri"
-        elif acc != "" and acc is not None:
-            attrs = "account_uri"
         else:
-            attrs = "object_uri, container_uri, account_uri"
+            attrs = "object_uri,container_uri,account_uri"
 
         attrs, all_obj_meta, all_con_meta, all_acc_meta = \
             eval_superset(attrs.split(","))
