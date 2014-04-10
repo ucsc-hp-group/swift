@@ -311,8 +311,7 @@ class MetadataController(object):
             status = 200
 
         else:
-            ret = json.dumps(attrs) + str(acc) + \
-                " " + str(con) + " " + str(obj)
+            ret = "One or more attributes not supported"
             status = 400
         return Response(
             request=req, body=ret + "\n", content_type="json", status=status)

@@ -790,6 +790,15 @@ class TestMetadataController(unittest.TestCase):
         metaReturned = testDict['/TEST_acc1/TEST_con2/TEST_obj3']
         self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con2/TEST_obj3')
 
+    def test_bad_attrs(self):
+        attrs = "bad_attr"
+        req = Request.blank(
+            '/v1/TEST_acc1/TEST_con1/TEST_obj1',
+            environ={'REQUEST_METHOD': 'GET',
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+        resp = req.get_response(self.controller)
+        self.assert_(resp.status.startswith('400'))
+
     ########################
     #   HELPER FUNCTIONS   #
     ########################
