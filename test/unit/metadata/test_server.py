@@ -695,7 +695,6 @@ class TestMetadataController(unittest.TestCase):
 
         self.obj1helperCustom(testList[0])
 
-
     def test_no_attributes_in_request_obj_scope(self):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
@@ -713,12 +712,14 @@ class TestMetadataController(unittest.TestCase):
         testDict = testList[1]
         self.assert_('/TEST_acc1/TEST_con1' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1']
-        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+        self.assertEquals(
+            metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
 
         testDict = testList[2]
         self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
-        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
+        self.assertEquals(
+            metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
 
     def test_no_attributes_in_request_con_scope(self):
         req = Request.blank(
@@ -738,17 +739,20 @@ class TestMetadataController(unittest.TestCase):
         testDict = testList[1]
         self.assert_('/TEST_acc1/TEST_con1' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1']
-        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+        self.assertEquals(
+            metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
 
         testDict = testList[2]
         self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
-        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
+        self.assertEquals(
+            metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
 
         testDict = testList[3]
         self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
-        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
+        self.assertEquals(
+            metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
 
     def test_no_attributes_in_request_acc_scope(self):
         req = Request.blank(
@@ -768,27 +772,32 @@ class TestMetadataController(unittest.TestCase):
         testDict = testList[1]
         self.assert_('/TEST_acc1/TEST_con1' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1']
-        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
+        self.assertEquals(
+            metaReturned['container_uri'], '/TEST_acc1/TEST_con1')
 
         testDict = testList[2]
         self.assert_('/TEST_acc1/TEST_con2' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con2']
-        self.assertEquals(metaReturned['container_uri'], '/TEST_acc1/TEST_con2')
+        self.assertEquals(
+            metaReturned['container_uri'], '/TEST_acc1/TEST_con2')
 
         testDict = testList[3]
         self.assert_('/TEST_acc1/TEST_con1/TEST_obj1' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj1']
-        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
+        self.assertEquals(
+            metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj1')
 
         testDict = testList[4]
         self.assert_('/TEST_acc1/TEST_con1/TEST_obj2' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con1/TEST_obj2']
-        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
+        self.assertEquals(
+            metaReturned['object_uri'], '/TEST_acc1/TEST_con1/TEST_obj2')
 
         testDict = testList[5]
         self.assert_('/TEST_acc1/TEST_con2/TEST_obj3' in testDict)
         metaReturned = testDict['/TEST_acc1/TEST_con2/TEST_obj3']
-        self.assertEquals(metaReturned['object_uri'], '/TEST_acc1/TEST_con2/TEST_obj3')
+        self.assertEquals(
+            metaReturned['object_uri'], '/TEST_acc1/TEST_con2/TEST_obj3')
 
     def test_bad_attrs(self):
         attrs = "bad_attr"
