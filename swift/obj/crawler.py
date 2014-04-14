@@ -96,15 +96,13 @@ class ObjectCrawler(Daemon):
         metadata['object_uri_create_time'] = \
             data.setdefault('X-Timestamp', 'NULL')
 
-        # Uri create needs to be implemented on meta server.
         metadata['object_last_modified_time'] = \
             data.setdefault('X-Timestamp', 'NULL')
 
         metadata['object_last_changed_time'] =  \
             data.setdefault('X-Timestamp', 'NULL')
 
-        metadata['object_delete_time'] = \
-            data.setdefault('delete_timestamp', 'NULL')
+        metadata['object_delete_time'] = 'NULL'
 
         metadata['object_last_activity_time'] = \
             data.setdefault('X-Timestamp', 'NULL')
@@ -127,8 +125,11 @@ class ObjectCrawler(Daemon):
         metadata['object_content_language'] = \
             data.setdefault('Content-Langauge', 'NULL')
 
-        metadata['object_cache_control'] = 'NULL'  # Not Implemented yet
-        metadata['object_delete_at'] = 'NULL'
+        metadata['object_cache_control'] = 'NULL' 
+
+        metadata['object_delete_at'] = \
+            data.setdefault('X-Delete-At', 'NULL')
+
         metadata['object_manifest_type'] = 'NULL'
         metadata['object_manifest'] = 'NULL'
         metadata['object_access_control_allow_origin'] = 'NULL'
