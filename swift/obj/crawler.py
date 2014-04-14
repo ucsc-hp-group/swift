@@ -39,7 +39,7 @@ class ObjectCrawler(Daemon):
         #self.slowdown = float(conf.get('slowdown', 0.01))
         #self.node_timeout = int(conf.get('node_timeout', 10))
         #self.conn_timeout = float(conf.get('conn_timeout', .5))
-        self.last_time_ran = time.time()
+        self.last_time_ran = 0
         self.diskfile_mgr = DiskFileManager(conf, self.logger)
 
     def run_forever(self, *args, **kwargs):
@@ -51,6 +51,7 @@ class ObjectCrawler(Daemon):
                 self.object_sweep()
             except (Exception, Timeout):
                 pass
+            self.last_time_ran = time.time()
             time.sleep(self.interval)
 
     def run_once(self, *args, **kwargs):
@@ -59,15 +60,18 @@ class ObjectCrawler(Daemon):
 
     def object_sweep(self):
         """
-        Scan through all objects and send meta data dict
+        Scan through all objects and send metadata dict of ones with updates.
         """
 
         all_locs = self.diskfile_mgr.object_audit_location_generator()
         metaList = []
         for location in all_locs:
             metaDict = self.collect_object(location)
+            metaDict = self.format_metadata(metaDict)
             if metaDict != {}:
-                metaList.append(self.format_metadata(metaDict))
+                modtime = metaDict["object_last_modified_time"]
+                if modtime != 'NULL' and modtime > self.last_time_ran:
+                    metaList.append(metaDict)
         ObjectSender = Sender(self.conf)
         ObjectSender.sendData(
             metaList, 'object_crawler', self.ip, self.port)
@@ -99,8 +103,7 @@ class ObjectCrawler(Daemon):
         metadata['object_last_modified_time'] = \
             data.setdefault('X-Timestamp', 'NULL')
 
-        metadata['object_last_changed_time'] =  \
-            data.setdefault('X-Timestamp', 'NULL')
+        metadata['object_last_changed_time'] = 'NULL'
 
         metadata['object_delete_time'] = 'NULL'
 
