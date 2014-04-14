@@ -95,7 +95,7 @@ class ObjectCrawler(Daemon):
         metadata['object_location'] = 'NULL'  # Not implemented yet
         metadata['object_uri_create_time'] = \
             data.setdefault('X-Timestamp', 'NULL')
-.
+
         metadata['object_last_modified_time'] = \
             data.setdefault('X-Timestamp', 'NULL')
 
