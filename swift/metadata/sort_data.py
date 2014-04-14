@@ -13,6 +13,22 @@ class Sort_metadata():
         #return_dict = {}
         j=0
         h=0
+
+        #sort by uri
+        if sort_value == "uri":
+            for i in range(len(attr_list)):
+                dict1 = attr_list[i] #parsed list of dictionaries into a new dictionary (dict1) {uri : {user_meta_key : user_meta_value}}
+                for d in dict1:
+                    dict2[i] = d
+            #print dict2
+            sorted_dict = sorted(dict2.iteritems(), key=operator.itemgetter(1))
+            #print sorted_dict
+            for k in range(len(sorted_dict)):
+                index_list.append(sorted_dict[k][0])
+                return_list.append(attr_list[index_list[k]])
+            return return_list
+
+        #sort by other attribute
         for i in range(len(attr_list)):
             #print i
             dict1 = attr_list[i] #parsed list of dictionaries into a new dictionary (dict1) {uri : {user_meta_key : user_meta_value}}
@@ -23,7 +39,6 @@ class Sort_metadata():
                         dict3[i]= dict2[d] #store values from dictionaries as key in new dictionary to pass for sorting
                         #j=j+1              #use incremental number value as placeholder for value in new dictionary (dict3)
         #print dict3
-
         sorted_dict = sorted(dict3.iteritems(), key=operator.itemgetter(1))
         #print len(sorted_dict)
 
@@ -42,28 +57,19 @@ class Sort_metadata():
 #
     def sort_data (self,attr_list,sort_value_list):
         return_list = []
-        #sort by uri
+        #defult, sort by uri
         if len(sort_value_list)==0:
-            dict1= {}
-            dict2= {}
-            index_list = []
-            for i in range(len(attr_list)):
-                dict1 = attr_list[i] #parsed list of dictionaries into a new dictionary (dict1) {uri : {user_meta_key : user_meta_value}}
-                for d in dict1:
-                    dict2[i] = d
-            #print dict2
-            sorted_dict = sorted(dict2.iteritems(), key=operator.itemgetter(1))
-            #print sorted_dict
-            for k in range(len(sorted_dict)):
-                index_list.append(sorted_dict[k][0])
-                return_list.append(attr_list[index_list[k]])
-            print return_list
+            return_list=self.sort_data_helper (attr_list,"uri")
         #
         if len(sort_value_list)>0:
             unsorted_list = []
-            dict_index_list = []
+            dup_value_dict = {}
             dict1 = {}
+            dict2 = {}
+            dict3 = {}
+            k = 0;
             for i in range(len(sort_value_list)):
+                #sort the attr_list for thr first time
                 if i==0:
                     return_list=self.sort_data_helper (attr_list,sort_value_list[i])
                 else:
@@ -77,14 +83,26 @@ class Sort_metadata():
                         for d in dict1:
                             dict2 = dict1[d] #Use a new dictionary to {user_meta_key : user_meta_value}
                             if dict2.has_key(sort_value_list[i-1]):
-                                if dict2[sort_value_list[i-1]] in dup_value_list:
-                                    dup_index_list.append(dup_value_list.index(dict2[sort_value_list[i-1]]))
-                                    dup_index_list.append(j)
+                                if dict2[sort_value_list[i-1]] in dup_value_dict:
+                                    dup_value_dict[dict2[sort_value_list[i-1]]].append(j)
+                                    #dup_index_list.append(dup_value_list.index(dict2[sort_value_list[i-1]]))
                                 else:
-                                    dup_value_list.append(dict2[sort_value_list[i-1]])
-                                #unsorted_list.append(dict1)
-                                #dict_index_list.append(j)
-                    print dup_index_list
-                  #  print unsorted_list
+                                    dup_value_dict[(dict2[sort_value_list[i-1]])]= [j]      #value list for the former sort key
+                    print dup_value_dict #{'bba': [2], 'bb': [0, 1]}
+                    #sort
+                    for key in dup_value_dict:
+                        if len(dup_value_dict[key])>1:
+                            ind_list = dup_value_dict[key]
+                            print ind_list  # the list of index that we need to sort for the ith attribute
+                            unsort_value_list = []
+                            for k in range(len(ind_list)):
+                                unsort_value_list.append(return_list[ind_list[k]])
+                                sorted_value_list = self.sort_data_helper(unsort_value_list,sort_value_list[i])
+                            #print sorted_value_list #sort the value of attri[i] that has the same value for attri[i-1]
+                            #put the sorted_value_list back
+                            for h in range(len(sorted_value_list)):
+                                return_list[ind_list[h]]=sorted_value_list[h]
+                    #print unsorted_list
                     #print return_list
+        print return_list
 
