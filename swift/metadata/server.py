@@ -22,6 +22,7 @@ from eventlet import Timeout
 import swift.common.db
 
 from swift.metadata.backend import MetadataBroker
+from swift.metadata.sort_data import Sort_metadata
 from swift.common.db import DatabaseAlreadyExists
 
 from swift.common.utils import get_logger, public, \
@@ -248,6 +249,13 @@ class MetadataController(object):
         broker = self._get_metadata_broker()
 
         base_version, acc, con, obj = split_path(req.path, 1, 4, True)
+        if 'sorted' in req.headers:
+            sort_value_list = req.headers['sorted']
+            if sort_value_list == '':
+                sort_value_list = 'uri'
+            toSort = True
+        else:
+            toSort = False
         if 'attributes' in req.headers:
             attrs = req.headers['attributes']
         # if there is no attributes lists, include everything in scope
@@ -306,6 +314,10 @@ class MetadataController(object):
             Do the deletion thing mentioned above
             """
             ret = [x for x in ret if x[x.keys()[0]] != {}]
+
+            if toSort:
+                sorter = Sort_metadata()
+                ret = sorter.sort_data(ret, sort_value_list.split(","))
 
             ret = json.dumps(ret)
             status = 200
