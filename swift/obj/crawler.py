@@ -15,7 +15,7 @@
 
 import time
 from random import random
-from swift.common.utils import get_logger, config_true_value
+from swift.common.utils import get_logger, config_true_value, normalize_timestamp
 from swift.common.daemon import Daemon
 from swift.obj.diskfile import DiskFileManager, DiskFileNotExist
 from eventlet import Timeout
@@ -45,14 +45,15 @@ class ObjectCrawler(Daemon):
     def run_forever(self, *args, **kwargs):
         """Run the updater continuously."""
         time.sleep(random() * self.interval)
-        self.last_time_ran = time.time()
         while True:
             try:
                 self.object_sweep()
+                self.last_time_ran = time.time()
             except (Exception, Timeout):
                 pass
-            self.last_time_ran = time.time()
             time.sleep(self.interval)
+
+
 
     def run_once(self, *args, **kwargs):
         """Run the updater once."""
@@ -70,11 +71,12 @@ class ObjectCrawler(Daemon):
             metaDict = self.format_metadata(metaDict)
             if metaDict != {}:
                 modtime = metaDict["object_last_modified_time"]
-                if modtime != 'NULL' and modtime > self.last_time_ran:
+                if modtime != 'NULL' and float(modtime) > self.last_time_ran:
                     metaList.append(metaDict)
-        ObjectSender = Sender(self.conf)
-        ObjectSender.sendData(
-            metaList, 'object_crawler', self.ip, self.port)
+        if metaList != []:
+            ObjectSender = Sender(self.conf)
+            ObjectSender.sendData(
+                metaList, 'object_crawler', self.ip, self.port)
 
     def collect_object(self, location):
         """
@@ -99,7 +101,7 @@ class ObjectCrawler(Daemon):
         metadata['object_location'] = 'NULL'  # Not implemented yet
         metadata['object_uri_create_time'] = \
             data.setdefault('X-Timestamp', 'NULL')
-.
+
         metadata['object_last_modified_time'] = \
             data.setdefault('X-Timestamp', 'NULL')
 
