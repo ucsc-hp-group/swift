@@ -136,6 +136,7 @@ class MetadataBroker(DatabaseBroker):
 
     # Data insertion methods
     def insert_account_md(self, data):
+        time_seen = time.time()
         with self.get() as conn:
             query = '''
                 INSERT OR REPLACE INTO account_metadata (
@@ -170,11 +171,28 @@ class MetadataBroker(DatabaseBroker):
                     item['account_object_count'],
                     item['account_bytes_used']
                 )
-                for custom in item:
-                    if(custom.startswith("account_meta")):
-                        self.insert_custom_md(
-                            conn, item['account_uri'], custom, item[custom])
-                conn.execute(formatted_query)
+
+                conn.row_factory = dict_factory
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM account_metadata")
+                acc_data = cur.fetchall()
+                cur.execute("SELECT custom_key,custom_value FROM custom_metadata WHERE uri = %s" % item['account_uri'])
+                cust_list = cur.fetchall()
+                for c in cust_list:
+                    acc_data[c['custom_key']] = acc_data[c['custom_value']]
+                insert = False
+                for key, val in item.iteritems():
+                    if val != acc_data[key]:
+                        insert = True
+                        item['account_last_changed_time'] = item['account_last_activity_time'] = time_seen
+                        if key == 'account_last_modified_time':
+                            item['account_last_modified_time'] = time_seen
+                if insert:
+                    for custom in item:
+                        if(custom.startswith("account_meta")):
+                            self.insert_custom_md(
+                                conn, item['account_uri'], custom, item[custom])
+                    conn.execute(formatted_query)
             conn.commit()
 
     def insert_container_md(self, data):
