@@ -184,7 +184,8 @@ class MetadataBroker(DatabaseBroker):
                 for key, val in item.iteritems():
                     if val != acc_data[key]:
                         insert = True
-                        item['account_last_changed_time'] = item['account_last_activity_time'] = time_seen
+                        item['account_last_changed_time'] = time_seen
+                        item['account_last_activity_time'] = time_seen
                         if key == 'account_last_modified_time':
                             item['account_last_modified_time'] = time_seen
                 if insert:
