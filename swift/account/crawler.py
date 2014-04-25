@@ -82,6 +82,9 @@ class AccountCrawler(Daemon):
                 #if normalize_timestamp(self.crawled_time) <
                 #reportedTime < normalize_timestamp(start_time):
                 metaDict = broker.get_info()
+                metaDict.update((key, value)
+                       for key, (value, timestamp) in
+                       broker.metadata.iteritems() if value != '')
         except (Exception, Timeout):
             self.logger.increment('failures')
         return metaDict
@@ -116,7 +119,7 @@ def format_metadata(data):
 
     #Insert all Account custom metadata
     for custom in data:
-        if(custom.startswith("X-Account-Meta")):
+        if(custom.lower().startswith("x-account-meta")):
             sanitized_custom = custom[2:14].lower() + custom[14:]
             sanitized_custom = sanitized_custom.replace('-', '_')
             metadata[sanitized_custom] = data[custom]
