@@ -1,4 +1,4 @@
-import json
+from swift.common.utils import json
 
 """
 [{'uri': {'obj_uri': 'val'}}, ...]
