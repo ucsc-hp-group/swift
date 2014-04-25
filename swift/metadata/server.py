@@ -38,6 +38,8 @@ from swift.common.swob import HTTPBadRequest, HTTPConflict, \
     HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
     HTTPException
 
+from swift.metadata.output import *
+
 DATADIR = 'metadata'
 ACCOUNT_SYS_ATTRS = [
     'account_uri',
@@ -319,14 +321,25 @@ class MetadataController(object):
                 sorter = Sort_metadata()
                 ret = sorter.sort_data(ret, sort_value_list.split(","))
 
-            ret = json.dumps(ret)
+            if "format" in req.headers:
+                format = req.headers['format']
+                if format == "json":
+                    out = output_json(ret)
+                elif format == "xml":
+                    out = output_xml(ret)
+                else:
+                    out = output_plain(ret)
+            else:
+                format = "text/plain"
+                out = output_plain(ret)
             status = 200
 
         else:
-            ret = "One or more attributes not supported"
+            out = "One or more attributes not supported"
             status = 400
+            format = "text/plain"
         return Response(
-            request=req, body=ret + "\n", content_type="json", status=status)
+            request=req, body=out + "\n", content_type=format, status=status)
 
     @public
     @timing_stats()
