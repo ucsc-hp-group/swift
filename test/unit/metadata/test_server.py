@@ -122,7 +122,7 @@ class TestMetadataController(unittest.TestCase):
         attrs = Oattrs
         req2 = Request.blank(
             '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -186,7 +186,7 @@ class TestMetadataController(unittest.TestCase):
         attrs = Oattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -234,7 +234,7 @@ class TestMetadataController(unittest.TestCase):
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -264,7 +264,7 @@ class TestMetadataController(unittest.TestCase):
         attrs = Cattrs
         req2 = Request.blank(
             '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -302,7 +302,7 @@ class TestMetadataController(unittest.TestCase):
         attrs = Cattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -330,7 +330,7 @@ class TestMetadataController(unittest.TestCase):
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -356,7 +356,7 @@ class TestMetadataController(unittest.TestCase):
         attrs = Aattrs
         req2 = Request.blank(
             '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -381,7 +381,7 @@ class TestMetadataController(unittest.TestCase):
         attrs = Aattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -406,7 +406,7 @@ class TestMetadataController(unittest.TestCase):
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -433,7 +433,7 @@ class TestMetadataController(unittest.TestCase):
         attrs = Aattrs + "," + Cattrs + "," + Oattrs
         req2 = Request.blank(
             '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -456,7 +456,7 @@ class TestMetadataController(unittest.TestCase):
         attrs = Aattrs + "," + Cattrs + "," + Oattrs
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -479,7 +479,7 @@ class TestMetadataController(unittest.TestCase):
         req2 = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp2 = req2.get_response(self.controller)
         self.assert_(resp2.status.startswith('200'))
         testList = json.loads(resp2.body)
@@ -497,7 +497,7 @@ class TestMetadataController(unittest.TestCase):
         attrs = "all_attrs"
         req = Request.blank(
             '/v1/TEST_acc1', environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -518,7 +518,7 @@ class TestMetadataController(unittest.TestCase):
         attrs = "all_attrs"
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1', environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -538,7 +538,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -553,7 +553,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -568,7 +568,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -583,7 +583,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -596,7 +596,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -609,7 +609,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -622,7 +622,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -635,7 +635,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -648,7 +648,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -661,7 +661,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -674,7 +674,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -687,7 +687,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -699,7 +699,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -725,7 +725,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -758,7 +758,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('200'))
         testList = json.loads(resp.body)
@@ -804,7 +804,7 @@ class TestMetadataController(unittest.TestCase):
         req = Request.blank(
             '/v1/TEST_acc1/TEST_con1/TEST_obj1',
             environ={'REQUEST_METHOD': 'GET',
-            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs})
+            'HTTP_X_TIMESTAMP': '0'}, headers={'attributes': attrs, 'format': 'json'})
         resp = req.get_response(self.controller)
         self.assert_(resp.status.startswith('400'))
 
