@@ -158,37 +158,40 @@ class MetadataBroker(DatabaseBroker):
             # Build and execute query for each requested insertion
             conn.commit()
             for item in data:
-                formatted_query = query % (
-                    item['account_uri'],
-                    item['account_name'],
-                    item['account_tenant_id'],
-                    item['account_first_use_time'],
-                    item['account_last_modified_time'],
-                    item['account_last_changed_time'],
-                    item['account_delete_time'],
-                    item['account_last_activity_time'],
-                    item['account_container_count'],
-                    item['account_object_count'],
-                    item['account_bytes_used']
-                )
-
                 conn.row_factory = dict_factory
                 cur = conn.cursor()
-                cur.execute("SELECT * FROM account_metadata")
+                cur.execute("SELECT * FROM account_metadata WHERE account_uri = '%s';" % item['account_uri'])
                 acc_data = cur.fetchall()
-                cur.execute("SELECT custom_key,custom_value FROM custom_metadata WHERE uri = %s" % item['account_uri'])
-                cust_list = cur.fetchall()
-                for c in cust_list:
-                    acc_data[c['custom_key']] = acc_data[c['custom_value']]
                 insert = False
-                for key, val in item.iteritems():
-                    if val != acc_data[key]:
-                        insert = True
-                        item['account_last_changed_time'] = time_seen
-                        item['account_last_activity_time'] = time_seen
-                        if key == 'account_last_modified_time':
-                            item['account_last_modified_time'] = time_seen
+                if acc_data != []:
+                    acc_data = acc_data[0]
+                    cur.execute("SELECT custom_key,custom_value FROM custom_metadata WHERE uri = '%s';" % item['account_uri'])
+                    cust_list = cur.fetchall()
+                    for c in cust_list:
+                        acc_data[c['custom_key']] = acc_data[c['custom_value']]
+                    for key, val in item.copy().iteritems():
+                        if val != acc_data[key] and key != 'account_tenant_id':
+                            insert = True
+                            item['account_last_changed_time'] = time_seen
+                            item['account_last_activity_time'] = time_seen
+                            if key == 'account_bytes_used' or key == 'account_container_count':
+                                item['account_last_modified_time'] = time_seen
+                else:
+                    insert = True
                 if insert:
+                    formatted_query = query % (
+                        item['account_uri'],
+                        item['account_name'],
+                        item['account_tenant_id'],
+                        item['account_first_use_time'],
+                        item.get('account_last_modified_time', item['account_first_use_time']),
+                        item.get('account_last_changed_time', item['account_first_use_time']),
+                        item['account_delete_time'],
+                        item.get('account_last_activity_time', item['account_first_use_time']),
+                        item['account_container_count'],
+                        item['account_object_count'],
+                        item['account_bytes_used']
+                    )
                     for custom in item:
                         if(custom.startswith("account_meta")):
                             self.insert_custom_md(

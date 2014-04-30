@@ -93,18 +93,18 @@ def format_metadata(data):
     metadata['account_uri'] = uri
     metadata['account_name'] = data['account']
     metadata['account_tenant_id'] = data.setdefault('id', 'NULL')
-    metadata['account_first_use_time'] = data.setdefault('created_at', 'NULL')
-    metadata['account_last_modified_time'] = \
-        data.setdefault('put_timestamp', 'NULL')
+    metadata['account_first_use_time'] = data.setdefault('put_timestamp', 'NULL')
+    # metadata['account_last_modified_time'] = \
+    #     data.setdefault('put_timestamp', 'NULL')
 
-    metadata['account_last_changed_time'] =  \
-        data.setdefault('put_timestamp', 'NULL')
+    # metadata['account_last_changed_time'] =  \
+    #     data.setdefault('put_timestamp', 'NULL')
 
     metadata['account_delete_time'] = \
         data.setdefault('delete_timestamp', 'NULL')
 
-    metadata['account_last_activity_time'] = \
-        data.setdefault('put_timestamp', 'NULL')
+    # metadata['account_last_activity_time'] = \
+    #     data.setdefault('put_timestamp', 'NULL')
 
     metadata['account_container_count'] = \
         data.setdefault('container_count', 'NULL')
