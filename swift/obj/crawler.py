@@ -105,7 +105,8 @@ class ObjectCrawler(Daemon):
         metadata['object_last_modified_time'] = \
             data.setdefault('X-Timestamp', 'NULL')
 
-        metadata['object_last_changed_time'] = 'NULL'
+        metadata['object_last_changed_time'] = \
+            data.setdefault('X-Timestamp', 'NULL')
 
         metadata['object_delete_time'] = 'NULL'
 

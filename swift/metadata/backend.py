@@ -308,7 +308,10 @@ class MetadataBroker(DatabaseBroker):
                     object_access_control_request_method,
                     object_access_control_request_headers
                 ) VALUES (
-                    "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
+                    "%s", "%s", "%s", "%s", "%s",
+                    COALESCE((SELECT object_uri_create_time
+                        FROM object_metadata WHERE object_uri = "%s"), "%s"),
+                    "%s", "%s", "%s", "%s",
                     "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s",
                     "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s"
                 )
@@ -322,6 +325,7 @@ class MetadataBroker(DatabaseBroker):
                     item['object_account_name'],
                     item['object_container_name'],
                     item['object_location'],
+                    item['object_uri'], # wat
                     item['object_uri_create_time'],
                     item['object_last_modified_time'],
                     item['object_last_changed_time'],
