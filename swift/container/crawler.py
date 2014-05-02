@@ -102,17 +102,9 @@ def format_metadata(data):
     metadata['container_name'] = data['container']
     metadata['container_account_name'] = data['account']
     metadata['container_create_time'] = data.setdefault('created_at', 'NULL')
-    metadata['container_last_modified_time'] = \
-        data.setdefault('put_timestamp', 'NULL')
-
-    metadata['container_last_changed_time'] = \
-        data.setdefault('put_timestamp', 'NULL')
 
     metadata['container_delete_time'] = \
         data.setdefault('delete_timestamp', 'NULL')
-
-    metadata['container_last_activity_time'] = \
-        data.setdefault('put_timestamp', 'NULL')
 
         #last_activity_time needs to be updated on meta server
     metadata['container_read_permissions'] = 'NULL'  # Not Implemented yet

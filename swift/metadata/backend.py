@@ -229,28 +229,49 @@ class MetadataBroker(DatabaseBroker):
             '''
             conn.commit()
             for item in data:
-                formatted_query = query % (
-                    item['container_uri'],
-                    item['container_name'],
-                    item['container_account_name'],
-                    item['container_create_time'],
-                    item['container_last_modified_time'],
-                    item['container_last_changed_time'],
-                    item['container_delete_time'],
-                    item['container_last_activity_time'],
-                    item['container_read_permissions'],
-                    item['container_write_permissions'],
-                    item['container_sync_to'],
-                    item['container_sync_key'],
-                    item['container_versions_location'],
-                    item['container_object_count'],
-                    item['container_bytes_used']
-                )
-                for custom in item:
-                    if(custom.startswith("container_meta")):
-                        self.insert_custom_md(
-                            conn, item['container_uri'], custom, item[custom])
-                conn.execute(formatted_query)
+                conn.row_factory = dict_factory
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM container_metadata WHERE container_uri = '%s';" % item['container_uri'])
+                con_data = cur.fetchall()
+                insert = False
+                if con_data != []:
+                    con_data = con_data[0]
+                    cur.execute("SELECT custom_key,custom_value FROM custom_metadata WHERE uri = '%s';" % item['container_uri'])
+                    cust_list = cur.fetchall()
+                    for c in cust_list:
+                        con_data[c['custom_key']] = con_data[c['custom_value']]
+                    for key, val in item.copy().iteritems():
+                        if val != con_data[key] and key != 'container_tenant_id':
+                            insert = True
+                            item['container_last_changed_time'] = time_seen
+                            item['container_last_activity_time'] = time_seen
+                            if key == 'container_bytes_used' or key == 'container_object_count':
+                                item['container_last_modified_time'] = time_seen
+                else:
+                    insert = True
+                if insert:
+                    formatted_query = query % (
+                        item['container_uri'],
+                        item['container_name'],
+                        item['container_account_name'],
+                        item['container_create_time'],
+                        item.get('container_last_modified_time', item['container_create_time']),
+                        item.get('container_last_changed_time', item['container_create_time']),
+                        item['container_delete_time'],
+                        item.get('container_last_activity_time', item['container_create_time']),
+                        item['container_read_permissions'],
+                        item['container_write_permissions'],
+                        item['container_sync_to'],
+                        item['container_sync_key'],
+                        item['container_versions_location'],
+                        item['container_object_count'],
+                        item['container_bytes_used']
+                    )
+                    for custom in item:
+                        if(custom.startswith("container_meta")):
+                            self.insert_custom_md(
+                                conn, item['container_uri'], custom, item[custom])
+                    conn.execute(formatted_query)
             conn.commit()
 
     def insert_object_md(self, data):
