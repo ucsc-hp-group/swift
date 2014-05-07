@@ -268,6 +268,7 @@ class MetadataController(object):
 
         attrs, all_obj_meta, all_con_meta, all_acc_meta = \
             eval_superset(attrs.split(","))
+        format = "text/plain"
         if self.check_attrs(attrs, acc, con, obj) or attrs == '':
             accAttrs, conAttrs, objAttrs, superAttrs, customAttrs = \
                 split_attrs_by_scope(attrs)
@@ -320,17 +321,16 @@ class MetadataController(object):
             if toSort:
                 sorter = Sort_metadata()
                 ret = sorter.sort_data(ret, sort_value_list.split(","))
-
             if "format" in req.headers:
-                format = req.headers['format']
-                if format == "json":
+                if req.headers['format'] == "json":
+                    format = "application/json"
                     out = output_json(ret)
-                elif format == "xml":
+                elif req.headers['format'] == "xml":
+                    format = "application/xml"
                     out = output_xml(ret)
                 else:
                     out = output_plain(ret)
             else:
-                format = "text/plain"
                 out = output_plain(ret)
             status = 200
 

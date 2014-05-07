@@ -37,7 +37,7 @@ class MetaDataMiddleware(object):
         headers = req.params
         conn.request('GET', req.path, headers=headers)
         resp = conn.getresponse()
-        return Response(request=req, body=resp.read(), content_type="json")
+        return Response(request=req, body=resp.read(), content_type=resp.getheader('Content-Type'))
 
     def BAD(self, req):
         """Returns a 400 for bad request"""
