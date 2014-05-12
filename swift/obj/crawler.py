@@ -46,6 +46,8 @@ class ObjectCrawler(Daemon):
         """Run the updater continuously."""
         time.sleep(random() * self.interval)
         while True:
+            with open("/opt/swift/OBJLOG.txt", "a+") as f:
+                f.write("START\n")
             try:
                 self.object_sweep()
                 self.last_time_ran = time.time()
@@ -67,12 +69,17 @@ class ObjectCrawler(Daemon):
         all_locs = self.diskfile_mgr.object_audit_location_generator()
         metaList = []
         for location in all_locs:
-            metaDict = self.collect_object(location)
-            metaDict = self.format_metadata(metaDict)
-            if metaDict != {}:
-                modtime = metaDict["object_last_modified_time"]
-                if modtime != 'NULL' and float(modtime) > self.last_time_ran:
-                    metaList.append(metaDict)
+            try:
+                metaDict = self.collect_object(location)
+
+                metaDict = self.format_metadata(metaDict)
+                if metaDict != {}:
+                    modtime = metaDict["object_last_modified_time"]
+                    if modtime != 'NULL' and float(modtime) > self.last_time_ran:
+                        metaList.append(metaDict)
+            except Exception:
+                pass
+            
         if metaList != []:
             ObjectSender = Sender(self.conf)
             ObjectSender.sendData(
@@ -87,8 +94,7 @@ class ObjectCrawler(Daemon):
             df = self.diskfile_mgr.get_diskfile_from_audit_location(location)
             metadata = df.read_metadata()
         except DiskFileNotExist:
-            with open("/opt/stack/data/swift/logs/obj-crawler.log", "a+") as f:
-                f.write("DISKFILE DOES NOT EXIST\n")
+            pass
         return metadata
 
     def format_metadata(self, data):
