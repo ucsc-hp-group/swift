@@ -41,6 +41,10 @@ from swift.common.swob import HTTPBadRequest, HTTPConflict, \
 from swift.metadata.output import *
 
 DATADIR = 'metadata'
+
+"""
+List of system attributes supported from OSMS API
+"""
 ACCOUNT_SYS_ATTRS = [
     'account_uri',
     'account_name',
@@ -104,7 +108,9 @@ OBJECT_SYS_ATTRS = [
 
 
 class MetadataController(object):
-    # WSGI Controller for metadata server
+    """"
+    WSGI Controller for metadata server
+    """
     save_headers = [
         'x-metadata-read',
         'x-metadata-write',
@@ -113,7 +119,9 @@ class MetadataController(object):
     ]
 
     def __init__(self, conf, logger=None):
+        # location/directory of the metadata database (meta.db)
         self.location = conf.get('location', '/srv/node/sdb1/metadata/')
+        # path the the actual file
         self.db_file = os.path.join(self.location, 'meta.db')
         self.logger = logger or get_logger(conf, log_route='metadata-server')
         self.root = conf.get('devices', '/srv/node')
@@ -145,20 +153,18 @@ class MetadataController(object):
 
     def _get_metadata_broker(self, **kwargs):
         """
-        Get a DB broker for the metadata
+        Returns an instance of the DB abstraction layer object (broker)
         """
-        # hash = hash_path(account, container)
-        # db_dir = storage_directory(DATADIR, part, hash)
-        # db_path = os.path.join(self.root, drive, drive)
-        # kwargs.setdefault('account', account)
-        # kwargs.setdefault('container', container)
-        # kwargs.setdefault('logger', self.logger)
         kwargs.setdefault('db_file', self.db_file)
         return MetadataBroker(**kwargs)
 
     def check_attrs(self, attrs, acc, con, obj):
         """
         Verify that attributes are valid
+        Checks the attr list against a list of system attributes
+        Allows for custom metadata.
+
+        returns: boolean wether the attrs are valid
         """
         for attr in attrs.split(','):
             if attr.startswith('object_meta') or \
@@ -286,16 +292,22 @@ class MetadataController(object):
             if all_acc_meta and accAttrs == "":
                 accAttrs = "account_uri"
 
+            # Builds initial query containing the
+            # split attributes for each item type
             accQuery = broker.get_attributes_query(acc, con, obj, accAttrs)
             conQuery = broker.get_attributes_query(acc, con, obj, conAttrs)
             objQuery = broker.get_attributes_query(acc, con, obj, objAttrs)
 
+            # If there is a query in the request add it to the end
+            # of the WHERE clause of the SQL
             if 'query' in req.headers:
                 query = req.headers['query']
                 accQuery = broker.get_uri_query(accQuery, query)
                 conQuery = broker.get_uri_query(conQuery, query)
                 objQuery = broker.get_uri_query(objQuery, query)
 
+            # if successful query add the results to the end of the
+            # accumulator list
             ret = []
             if not accQuery.startswith("BAD"):
                 ret.extend(broker.execute_query(
@@ -310,6 +322,7 @@ class MetadataController(object):
                     objQuery, acc, con, obj,
                     'object_uri' in attrs.split(',')))
 
+            # query the custom table
             ret = broker.custom_attributes_query(
                 customAttrs, ret, all_obj_meta, all_con_meta, all_acc_meta)
 
@@ -321,6 +334,11 @@ class MetadataController(object):
             if toSort:
                 sorter = Sort_metadata()
                 ret = sorter.sort_data(ret, sort_value_list.split(","))
+
+            # default format is plain text
+            # can choose between json/xml as well
+            # no error handling done right now
+            # just default everything to plain if spelling error
             if "format" in req.headers:
                 if req.headers['format'] == "json":
                     format = "application/json"
@@ -338,6 +356,8 @@ class MetadataController(object):
             out = "One or more attributes not supported"
             status = 400
             format = "text/plain"
+
+        # Returns the HTTP Response object with the result of the API request
         return Response(
             request=req, body=out + "\n", content_type=format, status=status)
 
@@ -350,25 +370,7 @@ class MetadataController(object):
         will send over new metadata. This is where that new metadata
         is sent to the database
         """
-        #drive, partition, account = split_and_validate_path(req, 3)
-
-        # if 'x-timestamp' not in req.headers \
-        #         or not check_float(req.headers['x-timestamp']):
-        #     return HTTPBadRequest(
-        #         body='Missing or bad timestamp',
-        #         request=req,
-        #         content_type='text/plain'
-        #     )
-
-        # if self.mount_check and not check_mount(self.root, drive):
-        #     return HTTPInsufficientStorage(drive=drive,request=req)
-
         broker = self._get_metadata_broker()
-
-        # if broker.is_deleted():
-        #     return metadata_deleted_response(broker, req, HTTPNotFound)
-
-        # timestamp = normalize_timestamp(req.headers['x-timestamp'])
 
         # Call broker insertion
         if 'user-agent' not in req.headers:
@@ -414,6 +416,11 @@ class MetadataController(object):
         return HTTPNoContent(request=req)
 
     def __call__(self, env, start_response):
+        """
+        Boilerplate code for how the server's code gets called
+        upon receiving a request.
+        Taken directly from other servers.
+        """
         # start_time = time.time()
         req = Request(env)
         self.logger.txn_id = req.headers.get('x-trans-id', None)
