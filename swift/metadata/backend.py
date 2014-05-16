@@ -14,6 +14,7 @@
 # limitations under the License.
 import os
 import time
+from string import maketrans
 from swift.common.utils import normalize_timestamp
 from swift.common.db import DatabaseBroker
 from swift.common.utils import json
@@ -433,7 +434,26 @@ class MetadataBroker(DatabaseBroker):
         Takes the output of get_attributes_query() as input (sql), and adds
         additional query information based on ?query=<> from the URI
         '''
-        return sql + " AND (" + queries + ")"
+        queries = queries.replace("%20", " ")
+        queries = queries.translate(None,';%')
+        query = ""
+        querysplit = queries.split(" ")
+        for i in querysplit:            
+            if i.startswith("object_meta"): 
+                first = "_".join(i.translate(maketrans("<>!=","____")).split("_")[:3])
+                i = "EXISTS (SELECT * FROM custom_metadata where uri == object_uri AND custom_key='%s' AND custom_value%s)" %\
+                (first,i[len(first):])
+            elif i.startswith("container_meta"):
+                first = "_".join(i.translate(maketrans("<>!=","____")).split("_")[:3])
+                i = "EXISTS (SELECT * FROM custom_metadata where uri == container_uri AND custom_key='%s' AND custom_value%s)" %\
+                (first,i[len(first):])
+            elif i.startswith("account_meta"):
+                first = "_".join(i.translate(maketrans("<>!=","____")).split("_")[:3])
+                i = "EXISTS (SELECT * FROM custom_metadata where uri == account_uri AND custom_key='%s' AND custom_value%s)" %\
+                (first,i[len(first):])
+            query += " " + i 
+        #raise Exception(query)
+        return sql + " AND" + query
 
     def custom_attributes_query(self, customAttrs, sysMetaList,
                                 all_obj_meta, all_con_meta, all_acc_meta):
