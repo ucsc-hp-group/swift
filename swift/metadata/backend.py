@@ -433,26 +433,26 @@ class MetadataBroker(DatabaseBroker):
         '''
         Takes the output of get_attributes_query() as input (sql), and adds
         additional query information based on ?query=<> from the URI
+        If Query refrences custom attribute, replace condition with EXECPT
+        Subquery on custom_metadata table with condition inside where clause.
+        Also preforms sanitation preventing SQL injection.
         '''
         queries = queries.replace("%20", " ")
-        queries = queries.translate(None,';%')
+        queries = queries.translate(None,';%[]&')
         query = ""
         querysplit = queries.split(" ")
-        for i in querysplit:            
-            if i.startswith("object_meta"): 
-                first = "_".join(i.translate(maketrans("<>!=","____")).split("_")[:3])
-                i = "EXISTS (SELECT * FROM custom_metadata where uri == object_uri AND custom_key='%s' AND custom_value%s)" %\
-                (first,i[len(first):])
-            elif i.startswith("container_meta"):
-                first = "_".join(i.translate(maketrans("<>!=","____")).split("_")[:3])
-                i = "EXISTS (SELECT * FROM custom_metadata where uri == container_uri AND custom_key='%s' AND custom_value%s)" %\
-                (first,i[len(first):])
-            elif i.startswith("account_meta"):
-                first = "_".join(i.translate(maketrans("<>!=","____")).split("_")[:3])
-                i = "EXISTS (SELECT * FROM custom_metadata where uri == account_uri AND custom_key='%s' AND custom_value%s)" %\
-                (first,i[len(first):])
+        for i in querysplit:
+            if (i.startswith("object_meta") 
+                        or i.startswith("container_meta") 
+                        or i.startswith("account_meta")):
+                first = i.split("_")[0]
+                key = "_".join(i.translate(maketrans("<>!=","____")).split("_")[:3])
+                i = """EXISTS (SELECT * FROM custom_metadata 
+                        where uri == %s_uri AND custom_key='%s' 
+                        AND custom_value%s)""" %\
+                        (first,key,i[len(key):])
             query += " " + i 
-        #raise Exception(query)
+
         return sql + " AND" + query
 
     def custom_attributes_query(self, customAttrs, sysMetaList,
