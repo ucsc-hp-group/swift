@@ -38,7 +38,7 @@ from swift.common.swob import HTTPBadRequest, HTTPConflict, \
     HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
     HTTPException
 
-from swift.metadata.output import *
+from swift.metadata.utils import output_plain, output_json, output_xml, Sort_metadata
 
 DATADIR = 'metadata'
 

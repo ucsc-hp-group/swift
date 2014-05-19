@@ -22,7 +22,7 @@ from swift.common.utils import get_logger, audit_location_generator, \
 from swift.common.request_helpers import is_sys_or_user_meta
 from swift.common.daemon import Daemon
 from eventlet import Timeout
-from swift.common.SendData import Sender
+from swift.metadata.utils import Sender
 
 
 class ContainerCrawler(Daemon):

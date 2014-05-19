@@ -19,7 +19,7 @@ from swift.common.utils import get_logger, config_true_value, normalize_timestam
 from swift.common.daemon import Daemon
 from swift.obj.diskfile import DiskFileManager, DiskFileNotExist
 from eventlet import Timeout
-from swift.common.SendData import Sender
+from swift.metadata.utils import Sender
 
 
 class ObjectCrawler(Daemon):

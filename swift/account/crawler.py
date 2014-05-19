@@ -21,7 +21,7 @@ from swift.common.utils import get_logger, audit_location_generator, \
     config_true_value
 from swift.common.daemon import Daemon
 from eventlet import Timeout
-from swift.common.SendData import Sender
+from swift.metadata.utils import Sender
 
 
 class AccountCrawler(Daemon):

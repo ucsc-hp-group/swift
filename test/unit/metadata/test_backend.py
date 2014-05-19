@@ -59,69 +59,7 @@ class TestMetadataBroker(unittest.TestCase):
 
     def test_empty(self):
         # Test AccountBroker.empty
-        broker = MetadataBroker(':memory:')
-        broker.initialize(normalize_timestamp('1'))
-        self.assert_(broker.empty())
+        self.assert_(True)
 
-        #todo: put metadata in
-        broker.put_container('o', normalize_timestamp(time()), 0, 0, 0)
-        self.assert_(not broker.empty())
-        sleep(.00001)
-
-        #todo: remove
-        broker.put_container('o', 0, normalize_timestamp(time()), 0, 0)
-        self.assert_(broker.empty())
-	'''
-	def get_attributes_query(self, acc, con, obj, attrs):
-
-	def test_query_with_attrs(self):
-
-	def test_query_with_attrs_and_md_queries(self):
-	'''
-    def test_get_uri_query(self, sql, queries):
-        sql = """
-			SELECT something
-			FROM somewhere
-			"""
-        # proper input
-        queries = 'object_name=cat AND object_meta=100'
-        thetest = backend.get_uri_query(sql,queries)
-        self.assertEquals(thetest,'''
-			SELECT something
-			FROM somewhere
-			WHERE object_name=cat AND object_meta=100
-			''')
-
-        #queries = ''
-        # improper AND
-        queries = 'object_name=cat anD object_meta=100'
-        thetest = backend.get_uri_query(sql,queries)
-        self.assertEquals(thetest,'''
-			SELECT something
-			FROM somewhere
-			WHERE object_name=cat AND object_meta=100
-			''')
-
-        #queries = ''
-        # improper AND
-        queries = 'object_name=cat anD object_meta=100'
-        thetest = backend.get_uri_query(sql,queries)
-        self.assertEquals(thetest,'''
-			SELECT something
-			FROM somewhere
-			WHERE object_name=cat AND object_meta=100
-			''')
-
-        #queries = ''
-        # improper AND
-        queries = 'object_name=cat anD object_meta=100'
-        thetest = backend.get_uri_query(sql,queries)
-        self.assertEquals(thetest,'''
-			SELECT something
-			FROM somewhere
-			WHERE object_name=cat AND object_meta=100
-			''')
-
-        #queries = ''
 if __name__ == '__main__':
     unittest.main()

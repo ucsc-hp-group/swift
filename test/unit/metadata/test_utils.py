@@ -1,11 +1,63 @@
-import hashlib
+# Copyright (c) 2010-2012 OpenStack Foundation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import unittest
-from swift.metadata.output import *
-from time import sleep, time
-from uuid import uuid4
-import sys
-import os.path
-# sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from swift.metadata.utils import *
+#from sort_dict4 import Sort_metadata
+
+
+class Test_Sort_metadata(unittest.TestCase):
+
+    def test_sort_data_helper(self):
+        attr_list = [{"/AUTH_admin/testDir/dog.jpg": {"object_name": "dog.jpg","value1":"ccc"}},
+                    {"/AUTH_admin": {"account_name": "AUTH_admin","value1":"aaa"}},
+                     {"/AUTH_admin/testDir/cat.jpg": {"object_name": "cat.jpg","value1":"bbb"}}]
+
+        exp_result = [{'/AUTH_admin': {'account_name': 'AUTH_admin', 'value1': 'aaa'}},
+                           {'/AUTH_admin/testDir/cat.jpg': {'object_name': 'cat.jpg', 'value1': 'bbb'}},
+                           {'/AUTH_admin/testDir/dog.jpg': {'object_name': 'dog.jpg', 'value1': 'ccc'}}]
+        sort_value = "value1"
+        sorting = Sort_metadata()
+        result = sorting.sort_data_helper(attr_list,sort_value)
+        self.assertEquals(result, exp_result)
+
+    def test_sort_data(self):
+        attr_list = [{"/AUTH_admin/testDir/dog.jpg": {"object_name": "dog.jpg","value1":"bbb"}},
+                    {"/AUTH_admin": {"account_name": "AUTH_admin","value1":"aaa"}},
+                     {"/AUTH_admin/testDir/cat.jpg": {"object_name": "cat.jpg","value1":"bbb"}}]
+
+        exp_result = [{'/AUTH_admin': {'account_name': 'AUTH_admin', 'value1': 'aaa'}},
+                           {'/AUTH_admin/testDir/cat.jpg': {'object_name': 'cat.jpg', 'value1': 'bbb'}},
+                           {'/AUTH_admin/testDir/dog.jpg': {'object_name': 'dog.jpg', 'value1': 'bbb'}}]
+        sort_values = ["value1","uri"]
+        sorting = Sort_metadata ()
+        result = sorting.sort_data(attr_list,sort_values)
+        self.assertEquals(result,exp_result)
+
+    def test_multiple_attr_types_sorted_by_uri(self):
+        attr_list = [{"/AUTH_admin/testDir/dog.jpg": {"object_name": "dog.jpg","value1":"ccc"}},
+                    {"/AUTH_admin": {"account_name": "AUTH_admin","value1":"aaa"}},
+                     {"/AUTH_admin/testDir/cat.jpg": {"object_name": "cat.jpg","value1":"bbb"}}]
+
+        exp_result = [{'/AUTH_admin': {'account_name': 'AUTH_admin', 'value1': 'aaa'}},
+                           {'/AUTH_admin/testDir/cat.jpg': {'object_name': 'cat.jpg', 'value1': 'bbb'}},
+                           {'/AUTH_admin/testDir/dog.jpg': {'object_name': 'dog.jpg', 'value1': 'ccc'}}]
+        sort_values = ['uri']
+        sorting = Sort_metadata()
+        result = sorting.sort_data(attr_list,sort_values)
+        self.assertEquals(result,exp_result)
 
 
 """

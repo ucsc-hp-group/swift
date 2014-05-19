@@ -1,242 +1,192 @@
+# Copyright (c) 2010-2012 OpenStack Foundation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-import time
-from xml.sax import saxutils
+from swift.common.exceptions import ConnectionTimeout
+from swift.common.http import HTTP_INTERNAL_SERVER_ERROR
+from swift.common.utils import json
+from eventlet import Timeout
+from eventlet.green.httplib import HTTPConnection
+from collections import OrderedDict
+import operator
 
-from swift.common.swob import HTTPOk, HTTPNoContent
-from swift.common.utils import json, normalize_timestamp
-from swift.common.db import DatabaseConnectionError
 
-# Fake metadata broker
-class FakeMetadataBroker(object):
+class Sender():
 
-    def get_info(self):
-        now = normalize_timestamp(time.time())
+    def __init__(self, conf):
 
-        return {
-            'object_count': 0,
-            'container_count': 0,
-            'bytes_used': 0,
-            'created_at': now,
-            'put_timestamp': now
-        }
+        self.conn_timeout = float(conf.get('conn_timeout', 3))
 
-    def list_meta_iter(self, *_, **__):
-        return []
+    def sendData(self, metaList, data_type, server_ip, server_port):
+        ip = server_ip
+        port = server_port
+        updatedData = json.dumps(metaList)
+        headers = {'user-agent': data_type}
+        with ConnectionTimeout(self.conn_timeout):
+            try:
+                conn = HTTPConnection('%s:%s' % (ip, port))
+                conn.request('PUT', '/', headers=headers, body=updatedData)
+                resp = conn.getresponse()
+                return resp
+            except (Exception, Timeout):
+                return HTTP_INTERNAL_SERVER_ERROR
 
-# Construct a listing response from metadata DB
-def metadata_listing_response(account, req, response_content_type, broker=None, 
-    limit='', marker='', end_marker='', prefix='', delimiter=''):
-    if broker is None:
-        broker = FakeMetadataBroker()
-    info = broker.get_info()
+def output_xml(metaList):
+    """
+    Converts the list of dicts into XML format
+    """
+    out = '<?xml version="1.0" encoding="UTF-8"?>\n\n'
+    out += "<metadata>" +'\n'
 
-    resp_headers = {
-        'X-Metadata-Container-Count': info['container_count'],
-        'X-Metadata-Object-Count': info['object_count'],
-        'X-Metadata-Bytes-Used': info['bytes_used'],
-        'X-Timestamp': info['created_at'],
-        'X-PUT-Timestamp': info['put_timestamp']
-    }
+    for d in metaList:
+        uri = d.keys()[0]
+        c = len(uri.split('/'))
+        if c == 2:
+            level = "account"
+        elif c == 3:
+            level = "container"
+        elif c >= 4:
+            level = "object"
+            
+        out += "<" + level + ' uri="' + uri + '">\n'
+        
+        for k in d[uri].keys():
+            val = d[uri][k]
+            out += "    <" + k + ">" + str(val) + "</" + k + ">\n"
+        
+        out += "</" + level + ">\n"
+    out += "</metadata>" + '\n'
+    return out
 
-    meta_list = broker.list_meta_iter(limit, marker, end_marker, prefix, delimiter)
+def output_plain(metaList):
+    """
+    Converts the list of dicts into a plain text format
+    """
+    out = ""
+    for d in metaList:
+        uri = d.keys()[0]
+        out += uri + '\n'
+        for k in d[uri].keys():
+            val = d[uri][k]
+            out += "    " + k + ":" + str(val) + '\n'
+    return out 
 
-    # List comprehensions for fun and profit
-    if response_content_type == 'application/json':
-        meta_list = json.dumps([
-            {
-                'subdir': name
-            }
-            if is_subdir
-            else
-            {
-                'subdir': name,
-                'count': object_count,
-                'bytes': bytes_used
-            }
-            for (name, object_count, bytes_used, is_subdir) in meta_list
-        ])
-    elif response_content_type.endswith('/xml'):
-        meta_list = '\n'.join([
-                '<?xml version="1.0" encoding="UTF-8"?>',
-                '<account name=%s>' % saxutils.quoteattr(account)
-            ] + [
-                '<subdir name=%s />' % saxutils.quoteattr(name)
-                if is_subdir
-                else
-                '<container><name>%s</name><count>%s</count><bytes>%s</bytes></container>' % \
-                    (saxutils.escape(name), object_count, bytes_used)
-                for (name, object_count, bytes_used, is_subdir) in meta_list
-            ] + ['</account>']
-        )
-    else:
-        if not meta_list:
-            resp = HTTPNoContent(request=req, headers=resp_headers)
-            resp.content_type = response_content_type
-            resp.charset = 'utf-8'
-            return resp
-        meta_list = '\n'.join(r[0] for r in meta_list + '\n')
+def output_json(metaList):
+    """
+    Converts the list of dicts into a JSON format 
+    """
+    return json.dumps(metaList, indent=4, separators=(',', ' : '))
 
-    ret = HTTPOk(body=meta_list, request=req, headers=resp_headers)
-    ret.content_type = response_content_type
-    ret.charset = 'utf-8'
-    return ret
+class Sort_metadata():
+    def sort_data_helper(self, attr_list, sort_value):
+        """
+        Unitary function to help main function to sort one value at a time
+        param attr_list:The list of unsorted dictionaries of custom metadata
+        param sort_value: the sorting attribute set by user
+        returns: The list of sorted dictionaries
+        """
+        dict1 = {}
+        dict2 = {}
+        dict3 = {}
+        index_list = []
+        return_list = []
+        j=0
+        h=0
 
-def metadata_deleted_response(self, broker, req, resp, body=''):
-    headers = {}
-    try:
-        if broker.is_status_deleted():
-            # Account does exist and is marked for deletion
-            headers = {'X-Account-Status': 'Deleted'}
-    except DatabaseConnectionError:
-        # Account does not exist!
-        pass
-    return resp(request=req, headers=headers, charset='utf-8', body=body)
+        """Default: if no set sort_value then sort by uri"""
+        if sort_value == "uri":
+            for i in range(len(attr_list)):
+                dict1 = attr_list[i]
+                """parsed list of dictionaries into a new dictionary"""
+                for d in dict1:
+                    dict2[i] = d
+            sorted_dict = sorted(dict2.iteritems(), key=operator.itemgetter(1))
+            for k in range(len(sorted_dict)):
+                index_list.append(sorted_dict[k][0])
+                return_list.append(attr_list[index_list[k]])
+            return return_list
 
-"""
-'schema' is a dict that looks like this:
-    {
-        'table': <table name>,
-        'columns': [..., {
-            'name': <column name>,
-            'type': <TEXT/INTEGER>,
-            'opts': [...,<DEFAULT/UNIQUE/...>] (?)
-        }]
-    }
-"""
+        """sort_value defined: sort by attribute"""
+        for i in range(len(attr_list)):
+            """parsed list of dictionaries into a new dictionary """
+            dict1 = attr_list[i]
+            for d in dict1:
+                dict2 = dict1[d]
+                for d in dict2:
+                    """Extract by only sort_value parameter (key)"""
+                    if d == sort_value:
+                        dict3[i]= dict2[d]
+                        """store values from dictionaries as key in new dictionary to pass for sorting"""
+        sorted_dict = sorted(dict3.iteritems(), key=operator.itemgetter(1))
 
-# build a query that creates a table from a given schema
-def build_create_table_sql(schema):
-    query = '''
-        CREATE TABLE %s(
-            ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
-            %s
-        );
-    '''
+        """Get indexes of the targetted entry for sorted attributes from the original list """
+        for k in range(len(sorted_dict)):
+            index_list.append(sorted_dict[k][0])
+            return_list.append(attr_list[index_list[k]])
 
-    ''.join([
-            '%s %s,' % (col['name'] , col['type'])
-        if i < len(schema['columns']) - 1
-        else
-            '%s %s' % (col['name'] , col ['type'])
-        for i, col in enumerate(schema['columns']) 
-    ])
+        """Appending the sorted attributes into original dictionary into the right indexes"""
+        for h in range(len(attr_list)):
+            if not(h in index_list):
+                return_list.append(attr_list[h])
 
-    return query % (schema['table'], qcols)
+        return return_list
 
-# build a query that inserts an entry, or updates an extant
-# entry in place
-def build_insert_sql(schema):
-    # schema should be a set of dicts
-    query = 'INSERT INTO %s(%s) VALUES(%s) ON DUPLICATE KEY UPDATE %s;'
+#
+    def sort_data (self,attr_list,sort_value_list):
+        """
+        Sorts custom metadata by more than one sorting attributes given by user
+        Param attr_list: The list of unsorted dictionaries of custom metadata
+        Param sort_value_list: List of more than one sorting attribute given by user
+        Returns: The list of sorted dictionaries by more than one sorting attribute
+        """
 
-    numcols = len(schema['columns']) - 1
-    qcols = ''.join([
-            '%s,' % col['name']
-        if i < numcols
-        else
-            '%s' % col['name']
-        for i, col in enumerate(schema['columns'])
-    ])
-    qtypes = ''.join([
-                u'\u0025s, '
-            if col['type'] == 'TEXT' or col['type'] == "TEXT DEFAULT '0'"
-            else
-                u'\u0025d, '
-        if i < numcols
-        else
-                u'\u0025s'
-            if col['type'] == 'TEXT'
-            else
-                u'\u0025d'
-        for i, col in enumerate(schema['columns'])
-    ])
-    qupdates = ''.join([
-            '%s = VALUES(%s), ' % (col['name'], col['name'])
-        if i < numcols
-        else
-            '%s = VALUES(%s)' % (col['name'], col['name']) 
-        for i, col in enumerate(schema['columns'])
-    ])
-    return query % (schema['table'], qcols, qtypes, qupdates)
-
-# Utilities to provide the valid columns of each table
-def get_account_md_schema():
-    return {
-        'account_uri': 'TEXT PRIMARY KEY',
-        'account_name': 'TEXT',
-        'account_tenant_id': 'TEXT',
-        'account_first_use_time': 'TEXT',
-        'account_last_modified_time': 'TEXT',
-        'account_last_changed_time': 'TEXT',
-        'account_delete_time': 'TEXT',
-        'account_last_activity_time': 'TEXT',
-        'account_container_count': 'INTEGER',
-        'account_object_count': 'INTEGER',
-        'account_bytes_used': 'INTEGER',
-        'account_meta': 'TEXT'
-    }
-
-def get_container_md_schema():
-    return {
-        'container_uri': 'TEXT PRIMARY KEY',
-        'container_name': 'TEXT',
-        'container_account_name': 'TEXT',
-        'container_create_time': 'TEXT',
-        'container_last_modified_time': 'TEXT',
-        'container_last_changed_time': 'TEXT',
-        'container_delete_time': 'TEXT',
-        'container_last_activity_time': 'TEXT',
-        'container_read_permissions': 'TEXT',
-        'container_write_permissions': 'TEXT',
-        'container_sync_to': 'TEXT',
-        'container_sync_key': 'TEXT',
-        'container_versions_location': 'TEXT',
-        'container_object_count': 'INTEGER',
-        'container_bytes_used': 'INTEGER',
-        'container_meta': 'TEXT'
-    }
-
-def get_object_md_schema():
-    return {
-        'object_uri' : 'TEXT PRIMARY KEY',
-        'object_name': 'TEXT',
-        'object_account_name': 'TEXT',
-        'object_container_name': 'TEXT',
-        'object_location': 'TEXT',
-        'object_uri_create_time': 'TEXT',
-        'object_last_modified_time': 'TEXT',
-        'object_last_changed_time': 'TEXT',
-        'object_delete_time': 'TEXT',
-        'object_last_activity_time': 'TEXT',
-        'object_etag_hash': 'TEXT',
-        'object_content_type': 'TEXT',
-        'object_content_length': 'INTEGER',
-        'object_content_encoding': 'TEXT',
-        'object_content_disposition': 'TEXT',
-        'object_content_language': 'TEXT',
-        'object_cache_control': 'TEXT',
-        'object_delete_at': 'TEXT',
-        'object_manifest_type': 'INTEGER',
-        'object_manifest': 'TEXT',
-        'object_access_control_allow_origin': 'TEXT',
-        'object_access_control_allow_credentials': 'TEXT',
-        'object_access_control_expose_headers': 'TEXT',
-        'object_access_control_max_age': 'TEXT',
-        'object_access_control_allow_methods': 'TEXT',
-        'object_access_control_allow_headers': 'TEXT',
-        'object_origin': 'TEXT',
-        'object_access_control_request_method': 'TEXT',
-        'object_access_control_request_headers': 'TEXT',
-        'object_meta': 'TEXT'
-    }
-
-# check for a column name inside some schema dict
-def cross_reference_md_schema(query, table):
-    if table == 'object_metadata' and query in get_object_md_schema():
-        return True
-    elif table == 'container_metadata' and query in get_container_md_schema():
-        return True
-    elif table == 'account_metadata' and query in get_account_md_schema():
-        return True
-    else:
-        return False
+        return_list = []
+        if sort_value_list == ['']:
+            return_list=self.sort_data_helper (attr_list,"uri")
+        #
+        if len(sort_value_list)>0:
+            unsorted_list = []
+            dup_value_dict = {}
+            dict1 = {}
+            dict2 = {}
+            dict3 = {}
+            k = 0;
+            for i in range(len(sort_value_list)):
+                if i==0:
+                    return_list=self.sort_data_helper(attr_list,sort_value_list[i])
+                else:
+                    dup_value_list=[]
+                    dup_index_list = []
+                    sort_value=sort_value_list[i]
+                    for j in range(len(return_list)):
+                        dict1 = return_list[j]
+                        for d in dict1:
+                            dict2 = dict1[d]
+                            if dict2.has_key(sort_value_list[i-1]):
+                                if dict2[sort_value_list[i-1]] in dup_value_dict:
+                                    dup_value_dict[dict2[sort_value_list[i-1]]].append(j)
+                                else:
+                                    dup_value_dict[(dict2[sort_value_list[i-1]])]= [j]
+                    """sort only duplicate attributes extracted from sort_data_helper based on multiple sorting parameters"""
+                    for key in dup_value_dict:
+                        if len(dup_value_dict[key])>1:
+                            ind_list = dup_value_dict[key]
+                            unsort_value_list = []
+                            for k in range(len(ind_list)):
+                                unsort_value_list.append(return_list[ind_list[k]])
+                                sorted_value_list = self.sort_data_helper(unsort_value_list,sort_value_list[i])
+                            """Add the sorted list back to original dictionary based on indexes"""
+                            for h in range(len(sorted_value_list)):
+                                return_list[ind_list[h]]=sorted_value_list[h]
+        return return_list
