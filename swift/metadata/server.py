@@ -22,7 +22,6 @@ from eventlet import Timeout
 import swift.common.db
 
 from swift.metadata.backend import MetadataBroker
-from swift.metadata.sort_data import Sort_metadata
 from swift.common.db import DatabaseAlreadyExists
 
 from swift.common.utils import get_logger, public, \
