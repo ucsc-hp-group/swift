@@ -70,232 +70,232 @@ class MetaDataMiddleware(object):
 #Account Attributes
         attr_list.append({
                 "attr_name" : "account_uri",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"}) 
         attr_list.append({
                 "attr_name" : "account_name",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})    
         attr_list.append({
                 "attr_name" : "account_tenant_id",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})    
-#        attr_list.append({
-#                "attr_name" : "account_first_use_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"}) 
-#        attr_list.append({
-#                "attr_name" : "account_last_modified_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"}) 
-#        attr_list.append({
-#                "attr_name" : "account_last_changed_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"}) 
-#        attr_list.append({
-#                "attr_name" : "account_delete_time"},
-#                "data_type" : "date"}, 
-#                "sortable"  : "true"}}) 
-#        attr_list.append({
-#                "attr_name" : "account_last_activity_time",
-#                "data_type" : "date"}, 
-#                "sortable"  : "true"}) 
+        attr_list.append({
+                "attr_name" : "account_first_use_time",
+                "data_type" : "date",
+                "sortable"  : "true"}) 
+        attr_list.append({
+                "attr_name" : "account_last_modified_time",
+                "data_type" : "date",
+                "sortable"  : "true"}) 
+        attr_list.append({
+                "attr_name" : "account_last_changed_time",
+                "data_type" : "date",
+                "sortable"  : "true"}) 
+        attr_list.append({
+                "attr_name" : "account_delete_time",
+                "data_type" : "date",
+                "sortable"  : "true"}) 
+        attr_list.append({
+                "attr_name" : "account_last_activity_time",
+                "data_type" : "date",
+                "sortable"  : "true"}) 
         attr_list.append({
                 "attr_name" : "account_container_count",
-                "data_type" : "numeric", 
+                "data_type" : "numeric",
                 "sortable"  : "true"}) 
         attr_list.append({
                 "attr_name" : "account_object_count",
-                "data_type" : "numeric", 
+                "data_type" : "numeric",
                 "sortable"  : "true"}) 
         attr_list.append({
                 "attr_name" : "account_bytes_used",
-                "data_type" : "numeric", 
+                "data_type" : "numeric",
                 "sortable"  : "true"}) 
 
 #Container Attrobutes
         attr_list.append({
                 "attr_name" : "container_uri",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "container_name",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "container_account_name",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "container_create_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "container_last_modified_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "container_last_changed_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "container_delete_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "container_last_activity_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "container_create_time",
+                "data_type" : "date",
+                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "container_last_modified_time",
+                "data_type" : "date",
+                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "container_last_changed_time",
+                "data_type" : "date",
+                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "container_delete_time",
+                "data_type" : "date",
+                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "container_last_activity_time",
+                "data_type" : "date",
+                "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "container_read_permissions",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "container_write_permissions",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "container_sync_to",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "container_sync_key",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "container_versions_location",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "container_object_count",
-                "data_type" : "numeric", 
+                "data_type" : "numeric",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "container_bytes_used",
-                "data_type" : "numeric", 
+                "data_type" : "numeric",
                 "sortable"  : "true"})
 
 #Object Attributes
         attr_list.append({
                 "attr_name" : "object_uri",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "object_name",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "object_account_name",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "object_container_name",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "object_location",
-#                "data_type" : "string", 
-#                "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "object_uri_create_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "object_last_modified_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "object_last_changed_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "object_delete_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"})
-#        attr_list.append({
-#                "attr_name" : "object_last_activity_time",
-#                "data_type" : "date", 
-#                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "object_location",
+                "data_type" : "string",
+                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "object_uri_create_time",
+                "data_type" : "date",
+                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "object_last_modified_time",
+                "data_type" : "date",
+                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "object_last_changed_time",
+                "data_type" : "date",
+                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "object_delete_time",
+                "data_type" : "date",
+                "sortable"  : "true"})
+        attr_list.append({
+                "attr_name" : "object_last_activity_time",
+                "data_type" : "date",
+                "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "object_etag_hash",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "object_content_type",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "object_content_length",
-                "data_type" : "numeric", 
+                "data_type" : "numeric",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "object_content_encoding",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "object_content_disposition",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "object_content_language",
-                "data_type" : "string", 
+                "data_type" : "string",
                 "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_cache_control",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
         attr_list.append({
                 "attr_name" : "object_delete_at",
-                "data_type" : "date", 
+                "data_type" : "date",
                 "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_manifest_type",
-#                "data_type" : "numeric", 
+#                "data_type" : "numeric",
 #                "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_manifest",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
 
 #Object CORS Attributes
 #        attr_list.append({
 #                "attr_name" : "object_access_control_allow_origin",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_access_control_allow_credentials",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_access_control_expose_headers",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_access_control_max_age",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_access_control_allow_methods",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_access_control_allow_headers",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_origin",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_access_control_request_method",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
 #        attr_list.append({
 #                "attr_name" : "object_access_control_request_headers",
-#                "data_type" : "string", 
+#                "data_type" : "string",
 #                "sortable"  : "true"})
 
-        body = json.dumps(body)
+        body = json.dumps(body, indent=4, separators=(',', ' : '))
         return Response(request=req, body=body, content_type="json")
 
 
