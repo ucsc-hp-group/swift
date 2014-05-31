@@ -178,7 +178,7 @@ class Sort_metadata():
                                     dup_value_dict[dict2[sort_value_list[i-1]]].append(j)
                                 else:
                                     dup_value_dict[(dict2[sort_value_list[i-1]])]= [j]
-                    """sort only duplicate attributes extracted from sort_data_helper based on multiple sorting parameters"""
+                    #sort only duplicate attributes extracted from sort_data_helper based on multiple sorting parameters
                     for key in dup_value_dict:
                         if len(dup_value_dict[key])>1:
                             ind_list = dup_value_dict[key]
@@ -186,7 +186,7 @@ class Sort_metadata():
                             for k in range(len(ind_list)):
                                 unsort_value_list.append(return_list[ind_list[k]])
                                 sorted_value_list = self.sort_data_helper(unsort_value_list,sort_value_list[i])
-                            """Add the sorted list back to original dictionary based on indexes"""
+                            #Add the sorted list back to original dictionary based on indexes
                             for h in range(len(sorted_value_list)):
                                 return_list[ind_list[h]]=sorted_value_list[h]
         return return_list
