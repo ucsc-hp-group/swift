@@ -21,12 +21,14 @@ from swift.common.utils import json
 
 
 class MetadataBroker(DatabaseBroker):
-
+    """ initialize the database and four tables, Three are for system metadata of account, container and object server. 
+        custom metadata are stored in key-value pair format in another table.
+    """
     type = 'metadata'
     db_contains_type = 'object'
     db_reclaim_timestamp = 'created_at'
 
-    # Initialize DB
+    
     def _initialize(self, conn, timestamp):
         # Create metadata tables
         self.create_account_md_table(conn)
