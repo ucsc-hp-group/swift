@@ -21,8 +21,10 @@ from swift.common.utils import json
 
 
 class MetadataBroker(DatabaseBroker):
-    """ initialize the database and four tables, Three are for system metadata of account, container and object server. 
-        custom metadata are stored in key-value pair format in another table.
+    """ 
+    initialize the database and four tables.
+    Three are for system metadata of account, container and object server. 
+    custom metadata are stored in key-value pair format in another table.
     """
     type = 'metadata'
     db_contains_type = 'object'
@@ -137,8 +139,9 @@ class MetadataBroker(DatabaseBroker):
             query % (uri, key, value, normalize_timestamp(time.time()))
         conn.execute(formatted_query)
 
-    # Data insertion methods
+
     def insert_account_md(self, data):
+        """Data insertion methods"""
         with self.get() as conn:
             query = '''
                 INSERT OR REPLACE INTO account_metadata (
@@ -333,7 +336,7 @@ class MetadataBroker(DatabaseBroker):
             json.dumps(acc_data)
         ])
 
-    # URI Attributes Parser
+    
     def get_attributes_query(self, acc, con, obj, attrs):
         """
         This query starts off the query string by adding the Attributes
@@ -566,16 +569,18 @@ class MetadataBroker(DatabaseBroker):
             return (row[0] == 0)
 
 
-#converts query return into a dictionary
+
 def dict_factory(cursor, row):
+    """Converts query return into a dictionary"""
     d = {}
     for idx, col in enumerate(cursor.description):
         d[col[0]] = row[idx]
     return d
 
 
-# Add URI to dict as `label`
+
 def attachURI(metaDict, acc, con, obj):
+    """Add URI to dict as `label`"""
     if obj != "" and obj is not None:
         uri = '/'.join(['', acc, con, obj])
     elif con != "" and con is not None:
@@ -585,10 +590,13 @@ def attachURI(metaDict, acc, con, obj):
     return {uri: metaDict}
 
 
-#checks if every attribute in the list starts with the correct.
-#returns the thing it begins with (object/container/account)
-#or "BAD" if error
+
 def attrsStartWith(attrs):
+    """
+    checks if every attribute in the list starts with the correct.
+    returns the thing it begins with (object/container/account)
+    or "BAD" if error
+    """
     objs = 0
     cons = 0
     accs = 0
