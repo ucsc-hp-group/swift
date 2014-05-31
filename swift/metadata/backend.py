@@ -32,7 +32,6 @@ class MetadataBroker(DatabaseBroker):
 
     
     def _initialize(self, conn, timestamp):
-        # Create metadata tables
         self.create_account_md_table(conn)
         self.create_container_md_table(conn)
         self.create_object_md_table(conn)
@@ -141,7 +140,7 @@ class MetadataBroker(DatabaseBroker):
 
 
     def insert_account_md(self, data):
-        """Data insertion methods"""
+        """Data insertion methods for account metadata table"""
         with self.get() as conn:
             query = '''
                 INSERT OR REPLACE INTO account_metadata (
@@ -184,6 +183,7 @@ class MetadataBroker(DatabaseBroker):
             conn.commit()
 
     def insert_container_md(self, data):
+        """Data insertion methods for container metadata table"""
         with self.get() as conn:
             query = '''
                 INSERT OR REPLACE INTO container_metadata (
@@ -238,6 +238,7 @@ class MetadataBroker(DatabaseBroker):
             conn.commit()
 
     def insert_object_md(self, data):
+        """Data insertion methods for object metadata table"""
         with self.get() as conn:
             query = '''
                 INSERT OR REPLACE INTO object_metadata (
@@ -433,9 +434,10 @@ class MetadataBroker(DatabaseBroker):
                     WHERE account_uri=%s
                 """ % (attrs, fromStr, uri)
 
-    # URI Query parser
+    
     def get_uri_query(self, sql, queries):
         '''
+        URI Query parser
         Takes the output of get_attributes_query() as input (sql), and adds
         additional query information based on ?query=<> from the URI
         If Query refrences custom attribute, replace condition with EXECPT
