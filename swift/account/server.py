@@ -21,17 +21,18 @@ from swift import gettext_ as _
 from eventlet import Timeout
 
 import swift.common.db
-from swift.account.backend import AccountBroker
-from swift.account.utils import account_listing_response
+from swift.account.backend import AccountBroker, DATADIR
+from swift.account.utils import account_listing_response, get_response_headers
 from swift.common.db import DatabaseConnectionError, DatabaseAlreadyExists
 from swift.common.request_helpers import get_param, get_listing_content_type, \
     split_and_validate_path
 from swift.common.utils import get_logger, hash_path, public, \
-    normalize_timestamp, storage_directory, config_true_value, \
-    json, timing_stats, replication
-from swift.common.constraints import ACCOUNT_LISTING_LIMIT, \
-    check_mount, check_float, check_utf8
+    Timestamp, storage_directory, config_true_value, \
+    json, timing_stats, replication, get_log_line
+from swift.common.constraints import check_mount, valid_timestamp, check_utf8
+from swift.common import constraints
 from swift.common.db_replicator import ReplicatorRpc
+from swift.common.base_storage_server import BaseStorageServer
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, \
     HTTPCreated, HTTPForbidden, HTTPInternalServerError, \
     HTTPMethodNotAllowed, HTTPNoContent, HTTPNotFound, \
@@ -40,20 +41,17 @@ from swift.common.swob import HTTPAccepted, HTTPBadRequest, \
 from swift.common.request_helpers import is_sys_or_user_meta
 
 
-DATADIR = 'accounts'
-
-
-class AccountController(object):
+class AccountController(BaseStorageServer):
     """WSGI controller for the account server."""
 
+    server_type = 'account-server'
+
     def __init__(self, conf, logger=None):
+        super(AccountController, self).__init__(conf)
         self.logger = logger or get_logger(conf, log_route='account-server')
+        self.log_requests = config_true_value(conf.get('log_requests', 'true'))
         self.root = conf.get('devices', '/srv/node')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
-        replication_server = conf.get('replication_server', None)
-        if replication_server is not None:
-            replication_server = config_true_value(replication_server)
-        self.replication_server = replication_server
         self.replicator_rpc = ReplicatorRpc(self.root, DATADIR, AccountBroker,
                                             self.mount_check,
                                             logger=self.logger)
@@ -91,14 +89,11 @@ class AccountController(object):
         drive, part, account = split_and_validate_path(req, 3)
         if self.mount_check and not check_mount(self.root, drive):
             return HTTPInsufficientStorage(drive=drive, request=req)
-        if 'x-timestamp' not in req.headers or \
-                not check_float(req.headers['x-timestamp']):
-            return HTTPBadRequest(body='Missing timestamp', request=req,
-                                  content_type='text/plain')
+        req_timestamp = valid_timestamp(req)
         broker = self._get_account_broker(drive, part, account)
         if broker.is_deleted():
             return self._deleted_response(broker, req, HTTPNotFound)
-        broker.delete_db(req.headers['x-timestamp'])
+        broker.delete_db(req_timestamp.internal)
         return self._deleted_response(broker, req, HTTPNoContent)
 
     @public
@@ -109,7 +104,13 @@ class AccountController(object):
         if self.mount_check and not check_mount(self.root, drive):
             return HTTPInsufficientStorage(drive=drive, request=req)
         if container:   # put account container
+            if 'x-timestamp' not in req.headers:
+                timestamp = Timestamp(time.time())
+            else:
+                timestamp = valid_timestamp(req)
             pending_timeout = None
+            container_policy_index = \
+                req.headers.get('X-Backend-Storage-Policy-Index', 0)
             if 'x-trans-id' in req.headers:
                 pending_timeout = 3
             broker = self._get_account_broker(drive, part, account,
@@ -117,8 +118,7 @@ class AccountController(object):
             if account.startswith(self.auto_create_account_prefix) and \
                     not os.path.exists(broker.db_file):
                 try:
-                    broker.initialize(normalize_timestamp(
-                        req.headers.get('x-timestamp') or time.time()))
+                    broker.initialize(timestamp.internal)
                 except DatabaseAlreadyExists:
                     pass
             if req.headers.get('x-account-override-deleted', 'no').lower() != \
@@ -127,18 +127,19 @@ class AccountController(object):
             broker.put_container(container, req.headers['x-put-timestamp'],
                                  req.headers['x-delete-timestamp'],
                                  req.headers['x-object-count'],
-                                 req.headers['x-bytes-used'])
+                                 req.headers['x-bytes-used'],
+                                 container_policy_index)
             if req.headers['x-delete-timestamp'] > \
                     req.headers['x-put-timestamp']:
                 return HTTPNoContent(request=req)
             else:
                 return HTTPCreated(request=req)
         else:   # put account
+            timestamp = valid_timestamp(req)
             broker = self._get_account_broker(drive, part, account)
-            timestamp = normalize_timestamp(req.headers['x-timestamp'])
             if not os.path.exists(broker.db_file):
                 try:
-                    broker.initialize(timestamp)
+                    broker.initialize(timestamp.internal)
                     created = True
                 except DatabaseAlreadyExists:
                     created = False
@@ -147,15 +148,15 @@ class AccountController(object):
                                               body='Recently deleted')
             else:
                 created = broker.is_deleted()
-                broker.update_put_timestamp(timestamp)
+                broker.update_put_timestamp(timestamp.internal)
                 if broker.is_deleted():
                     return HTTPConflict(request=req)
             metadata = {}
-            metadata.update((key, (value, timestamp))
+            metadata.update((key, (value, timestamp.internal))
                             for key, value in req.headers.iteritems()
                             if is_sys_or_user_meta('account', key))
             if metadata:
-                broker.update_metadata(metadata)
+                broker.update_metadata(metadata, validate_metadata=True)
             if created:
                 return HTTPCreated(request=req)
             else:
@@ -174,16 +175,7 @@ class AccountController(object):
                                           stale_reads_ok=True)
         if broker.is_deleted():
             return self._deleted_response(broker, req, HTTPNotFound)
-        info = broker.get_info()
-        headers = {
-            'X-Account-Container-Count': info['container_count'],
-            'X-Account-Object-Count': info['object_count'],
-            'X-Account-Bytes-Used': info['bytes_used'],
-            'X-Timestamp': info['created_at'],
-            'X-PUT-Timestamp': info['put_timestamp']}
-        headers.update((key, value)
-                       for key, (value, timestamp) in
-                       broker.metadata.iteritems() if value != '')
+        headers = get_response_headers(broker)
         headers['Content-Type'] = out_content_type
         return HTTPNoContent(request=req, headers=headers, charset='utf-8')
 
@@ -197,14 +189,15 @@ class AccountController(object):
         if delimiter and (len(delimiter) > 1 or ord(delimiter) > 254):
             # delimiters can be made more flexible later
             return HTTPPreconditionFailed(body='Bad delimiter')
-        limit = ACCOUNT_LISTING_LIMIT
+        limit = constraints.ACCOUNT_LISTING_LIMIT
         given_limit = get_param(req, 'limit')
         if given_limit and given_limit.isdigit():
             limit = int(given_limit)
-            if limit > ACCOUNT_LISTING_LIMIT:
-                return HTTPPreconditionFailed(request=req,
-                                              body='Maximum limit is %d' %
-                                              ACCOUNT_LISTING_LIMIT)
+            if limit > constraints.ACCOUNT_LISTING_LIMIT:
+                return HTTPPreconditionFailed(
+                    request=req,
+                    body='Maximum limit is %d' %
+                    constraints.ACCOUNT_LISTING_LIMIT)
         marker = get_param(req, 'marker', '')
         end_marker = get_param(req, 'end_marker')
         out_content_type = get_listing_content_type(req)
@@ -245,23 +238,18 @@ class AccountController(object):
     def POST(self, req):
         """Handle HTTP POST request."""
         drive, part, account = split_and_validate_path(req, 3)
-        if 'x-timestamp' not in req.headers or \
-                not check_float(req.headers['x-timestamp']):
-            return HTTPBadRequest(body='Missing or bad timestamp',
-                                  request=req,
-                                  content_type='text/plain')
+        req_timestamp = valid_timestamp(req)
         if self.mount_check and not check_mount(self.root, drive):
             return HTTPInsufficientStorage(drive=drive, request=req)
         broker = self._get_account_broker(drive, part, account)
         if broker.is_deleted():
             return self._deleted_response(broker, req, HTTPNotFound)
-        timestamp = normalize_timestamp(req.headers['x-timestamp'])
         metadata = {}
-        metadata.update((key, (value, timestamp))
+        metadata.update((key, (value, req_timestamp.internal))
                         for key, value in req.headers.iteritems()
                         if is_sys_or_user_meta('account', key))
         if metadata:
-            broker.update_metadata(metadata)
+            broker.update_metadata(metadata, validate_metadata=True)
         return HTTPNoContent(request=req)
 
     def __call__(self, env, start_response):
@@ -274,15 +262,12 @@ class AccountController(object):
             try:
                 # disallow methods which are not publicly accessible
                 try:
-                    method = getattr(self, req.method)
-                    getattr(method, 'publicly_accessible')
-                    replication_method = getattr(method, 'replication', False)
-                    if (self.replication_server is not None and
-                            self.replication_server != replication_method):
+                    if req.method not in self.allowed_methods:
                         raise AttributeError('Not allowed method.')
                 except AttributeError:
                     res = HTTPMethodNotAllowed()
                 else:
+                    method = getattr(self, req.method)
                     res = method(req)
             except HTTPException as error_response:
                 res = error_response
@@ -291,24 +276,17 @@ class AccountController(object):
                                         ' %(path)s '),
                                       {'method': req.method, 'path': req.path})
                 res = HTTPInternalServerError(body=traceback.format_exc())
-        trans_time = '%.4f' % (time.time() - start_time)
-        additional_info = ''
-        if res.headers.get('x-container-timestamp') is not None:
-            additional_info += 'x-container-timestamp: %s' % \
-                res.headers['x-container-timestamp']
-        log_message = '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %s "%s"' % (
-            req.remote_addr,
-            time.strftime('%d/%b/%Y:%H:%M:%S +0000', time.gmtime()),
-            req.method, req.path,
-            res.status.split()[0], res.content_length or '-',
-            req.headers.get('x-trans-id', '-'),
-            req.referer or '-', req.user_agent or '-',
-            trans_time,
-            additional_info)
-        if req.method.upper() == 'REPLICATE':
-            self.logger.debug(log_message)
-        else:
-            self.logger.info(log_message)
+        if self.log_requests:
+            trans_time = time.time() - start_time
+            additional_info = ''
+            if res.headers.get('x-container-timestamp') is not None:
+                additional_info += 'x-container-timestamp: %s' % \
+                    res.headers['x-container-timestamp']
+            log_msg = get_log_line(req, res, trans_time, additional_info)
+            if req.method.upper() == 'REPLICATE':
+                self.logger.debug(log_msg)
+            else:
+                self.logger.info(log_msg)
         return res(env, start_response)
 
 

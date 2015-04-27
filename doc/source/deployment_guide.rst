@@ -146,7 +146,7 @@ General Service Configuration
 -----------------------------
 
 Most Swift services fall into two categories.  Swift's wsgi servers and
-background daemons.  
+background daemons.
 
 For more information specific to the configuration of Swift's wsgi servers
 with paste deploy see :ref:`general-server-configuration`
@@ -177,7 +177,7 @@ exist in a single file ``/etc/swift/object-server.conf``::
 
 Swift services expect a configuration path as the first argument::
 
-    $ swift-object-auditor 
+    $ swift-object-auditor
     Usage: swift-object-auditor CONFIG [options]
 
     Error: missing config path argument
@@ -185,7 +185,7 @@ Swift services expect a configuration path as the first argument::
 If you omit the object-auditor section this file could not be used as the
 configuration path when starting the ``swift-object-auditor`` daemon::
 
-    $ swift-object-auditor /etc/swift/object-server.conf 
+    $ swift-object-auditor /etc/swift/object-server.conf
     Unable to find object-auditor config section in /etc/swift/object-server.conf
 
 If the configuration path is a directory instead of a file all of the files in
@@ -304,7 +304,27 @@ The main rule to remember when working with Swift configuration files is:
     using the ``set`` syntax or you'll probably mess up your non-paste.deploy
     configuration files.
 
+--------------------
+Common configuration
+--------------------
 
+An example of common configuration file can be found at etc/swift.conf-sample
+
+The following configuration options are available:
+
+===================  ==========  =============================================
+Option               Default     Description
+-------------------  ----------  ---------------------------------------------
+max_header_size      8192        max_header_size is the max number of bytes in
+                                 the utf8 encoding of each header. Using 8192
+                                 as default because eventlet use 8192 as max
+                                 size of header line. This value may need to
+                                 be increased when using identity v3 API
+                                 tokens including more than 7 catalog entries.
+                                 See also include_service_catalog in
+                                 proxy-server.conf-sample (documented in
+                                 overview_auth.rst)
+===================  ==========  =============================================
 
 ---------------------------
 Object Server Configuration
@@ -347,6 +367,9 @@ max_clients          1024        Maximum number of clients one worker can
                                  concurrently.
 disable_fallocate    false       Disable "fast fail" fallocate checks if the
                                  underlying filesystem does not support it.
+log_max_line_length  0           Caps the length of log lines to the
+                                 value given; no limit if set to 0, the
+                                 default.
 log_custom_handlers  None        Comma-separated list of functions to call
                                  to setup custom log handlers.
 eventlet_debug       false       If true, turn on debug logging for eventlet
@@ -458,12 +481,12 @@ handoffs_first      false              If set to True, partitions that are
                                        extreme situations.
 handoff_delete      auto               By default handoff partitions will be
                                        removed when it has successfully
-                                       replicated to all the cannonical nodes.
+                                       replicated to all the canonical nodes.
                                        If set to an integer n, it will remove
                                        the partition if it is successfully
                                        replicated to n nodes.  The default
                                        setting should not be changed, except
-                                       for extremem situations.
+                                       for extreme situations.
 node_timeout        DEFAULT or 10      Request timeout to external services.
                                        This uses what's set here, or what's set
                                        in the DEFAULT section, or 10 (though
@@ -497,12 +520,15 @@ log_name            object-auditor  Label used when logging
 log_facility        LOG_LOCAL0      Syslog log facility
 log_level           INFO            Logging level
 log_time            3600            Frequency of status logs in seconds.
-files_per_second    20              Maximum files audited per second. Should
-                                    be tuned according to individual system
-                                    specs. 0 is unlimited.
-bytes_per_second    10000000        Maximum bytes audited per second. Should
-                                    be tuned according to individual system
-                                    specs. 0 is unlimited.
+disk_chunk_size     65536           Size of chunks read during auditing
+files_per_second    20              Maximum files audited per second per
+                                    auditor process. Should be tuned according
+                                    to individual system specs. 0 is unlimited.
+bytes_per_second    10000000        Maximum bytes audited per second per
+                                    auditor process. Should be tuned according
+                                    to individual system specs. 0 is unlimited.
+concurrency         1               The number of parallel processes to use
+                                    for checksum auditing.
 ==================  ==============  ==========================================
 
 ------------------------------
@@ -546,6 +572,9 @@ max_clients          1024        Maximum number of clients one worker can
 user                 swift       User to run as
 disable_fallocate    false       Disable "fast fail" fallocate checks if the
                                  underlying filesystem does not support it.
+log_max_line_length  0           Caps the length of log lines to the
+                                 value given; no limit if set to 0, the
+                                 default.
 log_custom_handlers  None        Comma-separated list of functions to call
                                  to setup custom log handlers.
 eventlet_debug       false       If true, turn on debug logging for eventlet
@@ -675,6 +704,9 @@ db_preallocation     off         If you don't mind the extra disk space usage in
                                  fragmentation.
 disable_fallocate    false       Disable "fast fail" fallocate checks if the
                                  underlying filesystem does not support it.
+log_max_line_length  0           Caps the length of log lines to the
+                                 value given; no limit if set to 0, the
+                                 default.
 log_custom_handlers  None        Comma-separated list of functions to call
                                  to setup custom log handlers.
 eventlet_debug       false       If true, turn on debug logging for eventlet
@@ -751,6 +783,8 @@ delay_reaping       0                Normally, the reaper begins deleting
                                      2592000 = 30 days, for example.
 ==================  ===============  =========================================
 
+.. _proxy-server-config:
+
 --------------------------
 Proxy Server Configuration
 --------------------------
@@ -803,11 +837,24 @@ cors_allow_origin                              This is a list of hosts that
                                                Access-Control-Allow-Origin
                                                header in addition to what
                                                the container has set.
+log_max_line_length           0                Caps the length of log
+                                               lines to the value given;
+                                               no limit if set to 0, the
+                                               default.
 log_custom_handlers           None             Comma separated list of functions
                                                to call to setup custom log
                                                handlers.
 eventlet_debug                false            If true, turn on debug logging
                                                for eventlet
+
+expose_info                   true             Enables exposing configuration
+                                               settings via HTTP GET /info.
+
+admin_key                                      Key to use for admin calls that
+                                               are HMAC signed.  Default
+                                               is empty, which will
+                                               disable admin calls to
+                                               /info.
 ============================  ===============  =============================
 
 [proxy-server]
@@ -844,6 +891,10 @@ memcache_max_connections      2                Max number of connections to
                                                worker
 node_timeout                  10               Request timeout to external
                                                services
+recoverable_node_timeout      node_timeout     Request timeout to external
+                                               services for requests that, on
+                                               failure, can be recovered
+                                               from. For example, object GET.
 client_timeout                60               Timeout to read one chunk
                                                from a client
 conn_timeout                  0.5              Connection timeout to

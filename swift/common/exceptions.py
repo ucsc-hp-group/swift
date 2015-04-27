@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from eventlet import Timeout
+import swift.common.utils
 
 
 class MessageTimeout(Timeout):
@@ -27,6 +28,32 @@ class MessageTimeout(Timeout):
 
 
 class SwiftException(Exception):
+    pass
+
+
+class PutterConnectError(Exception):
+
+    def __init__(self, status=None):
+        self.status = status
+
+
+class InvalidTimestamp(SwiftException):
+    pass
+
+
+class InsufficientStorage(SwiftException):
+    pass
+
+
+class FooterNotSupported(SwiftException):
+    pass
+
+
+class MultiphasePUTNotSupported(SwiftException):
+    pass
+
+
+class SuffixSyncError(SwiftException):
     pass
 
 
@@ -54,7 +81,8 @@ class DiskFileDeleted(DiskFileNotExist):
 
     def __init__(self, metadata=None):
         self.metadata = metadata or {}
-        self.timestamp = self.metadata.get('X-Timestamp', 0)
+        self.timestamp = swift.common.utils.Timestamp(
+            self.metadata.get('X-Timestamp', 0))
 
 
 class DiskFileExpired(DiskFileDeleted):
@@ -66,6 +94,18 @@ class DiskFileNoSpace(DiskFileError):
 
 
 class DiskFileDeviceUnavailable(DiskFileError):
+    pass
+
+
+class DiskFileXattrNotSupported(DiskFileError):
+    pass
+
+
+class DeviceUnavailable(SwiftException):
+    pass
+
+
+class InvalidAccountInfo(SwiftException):
     pass
 
 
@@ -85,11 +125,19 @@ class ConnectionTimeout(Timeout):
     pass
 
 
+class ResponseTimeout(Timeout):
+    pass
+
+
 class DriveNotMounted(SwiftException):
     pass
 
 
 class LockTimeout(MessageTimeout):
+    pass
+
+
+class ThreadPoolDead(SwiftException):
     pass
 
 
@@ -106,6 +154,18 @@ class EmptyRingError(RingBuilderError):
 
 
 class DuplicateDeviceError(RingBuilderError):
+    pass
+
+
+class UnPicklingError(SwiftException):
+    pass
+
+
+class FileNotFoundError(SwiftException):
+    pass
+
+
+class PermissionError(SwiftException):
     pass
 
 
@@ -135,11 +195,19 @@ class ReplicationLockTimeout(LockTimeout):
     pass
 
 
+class MimeInvalid(SwiftException):
+    pass
+
+
+class APIVersionError(SwiftException):
+    pass
+
+
 class ClientException(Exception):
 
     def __init__(self, msg, http_scheme='', http_host='', http_port='',
                  http_path='', http_query='', http_status=0, http_reason='',
-                 http_device='', http_response_content=''):
+                 http_device='', http_response_content='', http_headers=None):
         Exception.__init__(self, msg)
         self.msg = msg
         self.http_scheme = http_scheme
@@ -151,6 +219,7 @@ class ClientException(Exception):
         self.http_reason = http_reason
         self.http_device = http_device
         self.http_response_content = http_response_content
+        self.http_headers = http_headers or {}
 
     def __str__(self):
         a = self.msg

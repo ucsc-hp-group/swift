@@ -14,16 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from subprocess import Popen
-from unittest import main, TestCase
+from unittest import main
 from uuid import uuid4
 import os
 import time
 import shutil
 
 from swiftclient import client
+from swift.obj.diskfile import get_data_dir
 
-from test.probe.common import kill_servers, reset_environment
+from test.probe.common import ReplProbeTest
 from swift.common.utils import readconf
 
 
@@ -66,28 +66,15 @@ def find_max_occupancy_node(dir_list):
     return number
 
 
-class TestReplicatorFunctions(TestCase):
+class TestReplicatorFunctions(ReplProbeTest):
     """
     Class for testing replicators and replication servers.
 
     By default configuration - replication servers not used.
-    For testing separete replication servers servers need to change
+    For testing separate replication servers servers need to change
     ring's files using set_info command or new ring's files with
     different port values.
     """
-    def setUp(self):
-        """
-        Reset all environment and start all servers.
-        """
-        (self.pids, self.port2server, self.account_ring, self.container_ring,
-         self.object_ring, self.url, self.token,
-         self.account, self.configs) = reset_environment()
-
-    def tearDown(self):
-        """
-        Stop all servers.
-        """
-        kill_servers(self.port2server, self.pids)
 
     def test_main(self):
         # Create one account, container and object file.
@@ -100,9 +87,10 @@ class TestReplicatorFunctions(TestCase):
         # Delete file "hashes.pkl".
         # Check, that all files were replicated.
         path_list = []
+        data_dir = get_data_dir(self.policy)
         # Figure out where the devices are
         for node_id in range(1, 5):
-            conf = readconf(self.configs['object'] % node_id)
+            conf = readconf(self.configs['object-server'][node_id])
             device_path = conf['app:object-server']['devices']
             for dev in self.object_ring.devs:
                 if dev['port'] == int(conf['app:object-server']['bind_port']):
@@ -111,7 +99,9 @@ class TestReplicatorFunctions(TestCase):
 
         # Put data to storage nodes
         container = 'container-%s' % uuid4()
-        client.put_container(self.url, self.token, container)
+        client.put_container(self.url, self.token, container,
+                             headers={'X-Storage-Policy':
+                                      self.policy.name})
 
         obj = 'object-%s' % uuid4()
         client.put_object(self.url, self.token, container, obj, 'VERIFY')
@@ -124,20 +114,13 @@ class TestReplicatorFunctions(TestCase):
         for files in files_list[num]:
             if not files.endswith('.pending'):
                 test_node_files_list.append(files)
-        test_node_dir_list = dir_list[num]
+        test_node_dir_list = []
+        for d in dir_list[num]:
+            if not d.startswith('tmp'):
+                test_node_dir_list.append(d)
         # Run all replicators
-        processes = []
-
         try:
-            for num in xrange(1, 9):
-                for server in ['object-replicator',
-                               'container-replicator',
-                               'account-replicator']:
-                    if not os.path.exists(self.configs[server] % (num)):
-                        continue
-                    processes.append(Popen(['swift-%s' % (server),
-                                            self.configs[server] % (num),
-                                            'forever']))
+            self.replicators.start()
 
             # Delete some files
             for directory in os.listdir(test_node):
@@ -164,24 +147,24 @@ class TestReplicatorFunctions(TestCase):
                     time.sleep(1)
 
             # Check behavior by deleting hashes.pkl file
-            for directory in os.listdir(os.path.join(test_node, 'objects')):
+            for directory in os.listdir(os.path.join(test_node, data_dir)):
                 for input_dir in os.listdir(os.path.join(
-                        test_node, 'objects', directory)):
+                        test_node, data_dir, directory)):
                     if os.path.isdir(os.path.join(
-                            test_node, 'objects', directory, input_dir)):
+                            test_node, data_dir, directory, input_dir)):
                         shutil.rmtree(os.path.join(
-                            test_node, 'objects', directory, input_dir))
+                            test_node, data_dir, directory, input_dir))
 
             # We will keep trying these tests until they pass for up to 60s
             begin = time.time()
             while True:
                 try:
                     for directory in os.listdir(os.path.join(
-                            test_node, 'objects')):
+                            test_node, data_dir)):
                         for input_dir in os.listdir(os.path.join(
-                                test_node, 'objects', directory)):
+                                test_node, data_dir, directory)):
                             self.assertFalse(os.path.isdir(
-                                os.path.join(test_node, 'objects',
+                                os.path.join(test_node, data_dir,
                                              directory, '/', input_dir)))
                     break
                 except Exception:
@@ -189,9 +172,9 @@ class TestReplicatorFunctions(TestCase):
                         raise
                     time.sleep(1)
 
-            for directory in os.listdir(os.path.join(test_node, 'objects')):
+            for directory in os.listdir(os.path.join(test_node, data_dir)):
                 os.remove(os.path.join(
-                    test_node, 'objects', directory, 'hashes.pkl'))
+                    test_node, data_dir, directory, 'hashes.pkl'))
 
             # We will keep trying these tests until they pass for up to 60s
             begin = time.time()
@@ -211,8 +194,7 @@ class TestReplicatorFunctions(TestCase):
                         raise
                     time.sleep(1)
         finally:
-            for process in processes:
-                process.kill()
+            self.replicators.stop()
 
 
 if __name__ == '__main__':

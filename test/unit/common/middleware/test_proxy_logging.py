@@ -22,12 +22,16 @@ import mock
 from test.unit import FakeLogger
 from swift.common.utils import get_logger
 from swift.common.middleware import proxy_logging
-from swift.common.swob import Request
+from swift.common.swob import Request, Response
+from swift.common import constraints
 
 
 class FakeApp(object):
 
-    def __init__(self, body=['FAKE APP'], response_str='200 OK'):
+    def __init__(self, body=None, response_str='200 OK'):
+        if body is None:
+            body = ['FAKE APP']
+
         self.body = body
         self.response_str = response_str
 
@@ -48,7 +52,10 @@ class FakeAppThatExcepts(object):
 
 class FakeAppNoContentLengthNoTransferEncoding(object):
 
-    def __init__(self, body=['FAKE APP']):
+    def __init__(self, body=None):
+        if body is None:
+            body = ['FAKE APP']
+
         self.body = body
 
     def __call__(self, env, start_response):
@@ -343,6 +350,26 @@ class TestProxyLogging(unittest.TestCase):
             headers = unquote(log_parts[14]).split('\n')
             self.assert_('Host: localhost:80' in headers)
 
+    def test_access_log_headers_only(self):
+        app = proxy_logging.ProxyLoggingMiddleware(
+            FakeApp(), {'log_headers': 'yes',
+                        'access_log_headers_only': 'FIRST, seCond'})
+        app.access_logger = FakeLogger()
+        req = Request.blank('/',
+                            environ={'REQUEST_METHOD': 'GET'},
+                            headers={'First': '1',
+                                     'Second': '2',
+                                     'Third': '3'})
+        resp = app(req.environ, start_response)
+        # exhaust generator
+        [x for x in resp]
+        log_parts = self._log_parts(app)
+        headers = unquote(log_parts[14]).split('\n')
+        self.assert_('First: 1' in headers)
+        self.assert_('Second: 2' in headers)
+        self.assert_('Third: 3' not in headers)
+        self.assert_('Host: localhost:80' not in headers)
+
     def test_upload_size(self):
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(),
                                                    {'log_headers': 'yes'})
@@ -402,6 +429,27 @@ class TestProxyLogging(unittest.TestCase):
         log_parts = self._log_parts(app)
         self.assertEquals(log_parts[0], '1.2.3.4')  # client ip
         self.assertEquals(log_parts[1], '1.2.3.4')  # remote addr
+
+    def test_iterator_closing(self):
+
+        class CloseableBody(object):
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+            def __iter__(self):
+                return iter(["CloseableBody"])
+
+        body = CloseableBody()
+        app = proxy_logging.ProxyLoggingMiddleware(FakeApp(body), {})
+        req = Request.blank('/', environ={'REQUEST_METHOD': 'GET',
+                                          'REMOTE_ADDR': '1.2.3.4'})
+        resp = app(req.environ, start_response)
+        # exhaust generator
+        [x for x in resp]
+        self.assertTrue(body.closed)
 
     def test_proxy_client_logging(self):
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})
@@ -632,7 +680,7 @@ class TestProxyLogging(unittest.TestCase):
     def test_log_auth_token(self):
         auth_token = 'b05bf940-0464-4c0e-8c70-87717d2d73e8'
 
-        # Default - no reveal_sensitive_prefix in config
+        # Default - reveal_sensitive_prefix is 16
         # No x-auth-token header
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})
         app.access_logger = FakeLogger()
@@ -649,7 +697,7 @@ class TestProxyLogging(unittest.TestCase):
         resp = app(req.environ, start_response)
         resp_body = ''.join(resp)
         log_parts = self._log_parts(app)
-        self.assertEquals(log_parts[9], auth_token)
+        self.assertEquals(log_parts[9], 'b05bf940-0464-4c...')
 
         # Truncate to first 8 characters
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {
@@ -673,6 +721,17 @@ class TestProxyLogging(unittest.TestCase):
         # Token length and reveal_sensitive_prefix are same (no truncate)
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {
             'reveal_sensitive_prefix': str(len(auth_token))})
+        app.access_logger = FakeLogger()
+        req = Request.blank('/', environ={'REQUEST_METHOD': 'GET',
+                                          'HTTP_X_AUTH_TOKEN': auth_token})
+        resp = app(req.environ, start_response)
+        resp_body = ''.join(resp)
+        log_parts = self._log_parts(app)
+        self.assertEquals(log_parts[9], auth_token)
+
+        # No effective limit on auth token
+        app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {
+            'reveal_sensitive_prefix': constraints.MAX_HEADER_SIZE})
         app.access_logger = FakeLogger()
         req = Request.blank('/', environ={'REQUEST_METHOD': 'GET',
                                           'HTTP_X_AUTH_TOKEN': auth_token})
@@ -714,7 +773,7 @@ class TestProxyLogging(unittest.TestCase):
             resp = app(req.environ, start_response)
             resp_body = ''.join(resp)
         log_parts = self._log_parts(app)
-        self.assertEquals(len(log_parts), 20)
+        self.assertEquals(len(log_parts), 21)
         self.assertEquals(log_parts[0], '-')
         self.assertEquals(log_parts[1], '-')
         self.assertEquals(log_parts[2], '26/Apr/1970/17/46/41')
@@ -736,6 +795,121 @@ class TestProxyLogging(unittest.TestCase):
         self.assertEquals(log_parts[17], '-')
         self.assertEquals(log_parts[18], '10000000.000000000')
         self.assertEquals(log_parts[19], '10000001.000000000')
+        self.assertEquals(log_parts[20], '-')
+
+    def test_dual_logging_middlewares(self):
+        # Since no internal request is being made, outer most proxy logging
+        # middleware, log1, should have performed the logging.
+        app = FakeApp()
+        flg0 = FakeLogger()
+        env = {}
+        log0 = proxy_logging.ProxyLoggingMiddleware(app, env, logger=flg0)
+        flg1 = FakeLogger()
+        log1 = proxy_logging.ProxyLoggingMiddleware(log0, env, logger=flg1)
+
+        req = Request.blank('/', environ={'REQUEST_METHOD': 'GET'})
+        resp = log1(req.environ, start_response)
+        resp_body = ''.join(resp)
+        self._log_parts(log0, should_be_empty=True)
+        log_parts = self._log_parts(log1)
+        self.assertEquals(log_parts[3], 'GET')
+        self.assertEquals(log_parts[4], '/')
+        self.assertEquals(log_parts[5], 'HTTP/1.0')
+        self.assertEquals(log_parts[6], '200')
+        self.assertEquals(resp_body, 'FAKE APP')
+        self.assertEquals(log_parts[11], str(len(resp_body)))
+
+    def test_dual_logging_middlewares_w_inner(self):
+
+        class FakeMiddleware(object):
+            """
+            Fake middleware to make a separate internal request, but construct
+            the response with different data.
+            """
+            def __init__(self, app, conf):
+                self.app = app
+                self.conf = conf
+
+            def GET(self, req):
+                # Make the internal request
+                ireq = Request.blank('/', environ={'REQUEST_METHOD': 'GET'})
+                resp = self.app(ireq.environ, start_response)
+                resp_body = ''.join(resp)
+                if resp_body != 'FAKE APP':
+                    return Response(request=req,
+                                    body="FAKE APP WAS NOT RETURNED",
+                                    content_type="text/plain")
+                # But our response is different
+                return Response(request=req, body="FAKE MIDDLEWARE",
+                                content_type="text/plain")
+
+            def __call__(self, env, start_response):
+                req = Request(env)
+                return self.GET(req)(env, start_response)
+
+        # Since an internal request is being made, inner most proxy logging
+        # middleware, log0, should have performed the logging.
+        app = FakeApp()
+        flg0 = FakeLogger()
+        env = {}
+        log0 = proxy_logging.ProxyLoggingMiddleware(app, env, logger=flg0)
+        fake = FakeMiddleware(log0, env)
+        flg1 = FakeLogger()
+        log1 = proxy_logging.ProxyLoggingMiddleware(fake, env, logger=flg1)
+
+        req = Request.blank('/', environ={'REQUEST_METHOD': 'GET'})
+        resp = log1(req.environ, start_response)
+        resp_body = ''.join(resp)
+
+        # Inner most logger should have logged the app's response
+        log_parts = self._log_parts(log0)
+        self.assertEquals(log_parts[3], 'GET')
+        self.assertEquals(log_parts[4], '/')
+        self.assertEquals(log_parts[5], 'HTTP/1.0')
+        self.assertEquals(log_parts[6], '200')
+        self.assertEquals(log_parts[11], str(len('FAKE APP')))
+
+        # Outer most logger should have logged the other middleware's response
+        log_parts = self._log_parts(log1)
+        self.assertEquals(log_parts[3], 'GET')
+        self.assertEquals(log_parts[4], '/')
+        self.assertEquals(log_parts[5], 'HTTP/1.0')
+        self.assertEquals(log_parts[6], '200')
+        self.assertEquals(resp_body, 'FAKE MIDDLEWARE')
+        self.assertEquals(log_parts[11], str(len(resp_body)))
+
+    def test_policy_index(self):
+        # Policy index can be specified by X-Backend-Storage-Policy-Index
+        # in the request header for object API
+        app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})
+        app.access_logger = FakeLogger()
+        req = Request.blank('/v1/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'X-Backend-Storage-Policy-Index': '1'})
+        resp = app(req.environ, start_response)
+        ''.join(resp)
+        log_parts = self._log_parts(app)
+        self.assertEquals(log_parts[20], '1')
+
+        # Policy index can be specified by X-Backend-Storage-Policy-Index
+        # in the response header for container API
+        app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})
+        app.access_logger = FakeLogger()
+        req = Request.blank('/v1/a/c', environ={'REQUEST_METHOD': 'GET'})
+
+        def fake_call(app, env, start_response):
+            start_response(app.response_str,
+                           [('Content-Type', 'text/plain'),
+                            ('Content-Length', str(sum(map(len, app.body)))),
+                            ('X-Backend-Storage-Policy-Index', '1')])
+            while env['wsgi.input'].read(5):
+                pass
+            return app.body
+
+        with mock.patch.object(FakeApp, '__call__', fake_call):
+            resp = app(req.environ, start_response)
+            ''.join(resp)
+        log_parts = self._log_parts(app)
+        self.assertEquals(log_parts[20], '1')
 
 
 if __name__ == '__main__':

@@ -13,24 +13,80 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import errno
+import os
+import uuid
 from swift import gettext_ as _
 from time import ctime, time
-from random import random, shuffle
+from random import choice, random, shuffle
 from struct import unpack_from
 
 from eventlet import sleep, Timeout
 
 import swift.common.db
-from swift.container import server as container_server
-from swiftclient import delete_object, put_object, quote
-from swift.container.backend import ContainerBroker
-from swift.common.direct_client import direct_get_object
+from swift.container.backend import ContainerBroker, DATADIR
+from swift.common.container_sync_realms import ContainerSyncRealms
+from swift.common.internal_client import (
+    delete_object, put_object, InternalClient, UnexpectedResponse)
 from swift.common.exceptions import ClientException
 from swift.common.ring import Ring
-from swift.common.utils import audit_location_generator, get_logger, \
-    hash_path, config_true_value, validate_sync_to, whataremyips, FileLikeIter
+from swift.common.ring.utils import is_local_device
+from swift.common.utils import (
+    audit_location_generator, clean_content_type, config_true_value,
+    FileLikeIter, get_logger, hash_path, quote, urlparse, validate_sync_to,
+    whataremyips, Timestamp)
 from swift.common.daemon import Daemon
 from swift.common.http import HTTP_UNAUTHORIZED, HTTP_NOT_FOUND
+from swift.common.storage_policy import POLICIES
+from swift.common.wsgi import ConfigString
+
+
+# The default internal client config body is to support upgrades without
+# requiring deployment of the new /etc/swift/internal-client.conf
+ic_conf_body = """
+[DEFAULT]
+# swift_dir = /etc/swift
+# user = swift
+# You can specify default log routing here if you want:
+# log_name = swift
+# log_facility = LOG_LOCAL0
+# log_level = INFO
+# log_address = /dev/log
+#
+# comma separated list of functions to call to setup custom log handlers.
+# functions get passed: conf, name, log_to_console, log_route, fmt, logger,
+# adapted_logger
+# log_custom_handlers =
+#
+# If set, log_udp_host will override log_address
+# log_udp_host =
+# log_udp_port = 514
+#
+# You can enable StatsD logging here:
+# log_statsd_host = localhost
+# log_statsd_port = 8125
+# log_statsd_default_sample_rate = 1.0
+# log_statsd_sample_rate_factor = 1.0
+# log_statsd_metric_prefix =
+
+[pipeline:main]
+pipeline = catch_errors proxy-logging cache proxy-server
+
+[app:proxy-server]
+use = egg:swift#proxy
+# See proxy-server.conf-sample for options
+
+[filter:cache]
+use = egg:swift#memcache
+# See proxy-server.conf-sample for options
+
+[filter:proxy-logging]
+use = egg:swift#proxy_logging
+
+[filter:catch_errors]
+use = egg:swift#catch_errors
+# See proxy-server.conf-sample for options
+""".lstrip()
 
 
 class ContainerSync(Daemon):
@@ -95,16 +151,14 @@ class ContainerSync(Daemon):
                  section of the container-server.conf
     :param container_ring: If None, the <swift_dir>/container.ring.gz will be
                            loaded. This is overridden by unit tests.
-    :param object_ring: If None, the <swift_dir>/object.ring.gz will be loaded.
-                        This is overridden by unit tests.
     """
 
-    def __init__(self, conf, container_ring=None, object_ring=None):
+    def __init__(self, conf, container_ring=None, logger=None):
         #: The dict of configuration values from the [container-sync] section
         #: of the container-server.conf.
         self.conf = conf
         #: Logger to use for container-sync log lines.
-        self.logger = get_logger(conf, log_route='container-sync')
+        self.logger = logger or get_logger(conf, log_route='container-sync')
         #: Path to the local device mount points.
         self.devices = conf.get('devices', '/srv/node')
         #: Indicates whether mount points should be verified as actual mount
@@ -117,12 +171,22 @@ class ContainerSync(Daemon):
         #: to the next one. If a conatiner sync hasn't finished in this time,
         #: it'll just be resumed next scan.
         self.container_time = int(conf.get('container_time', 60))
-        #: The list of hosts we're allowed to send syncs to.
+        #: ContainerSyncCluster instance for validating sync-to values.
+        self.realms_conf = ContainerSyncRealms(
+            os.path.join(
+                conf.get('swift_dir', '/etc/swift'),
+                'container-sync-realms.conf'),
+            self.logger)
+        #: The list of hosts we're allowed to send syncs to. This can be
+        #: overridden by data in self.realms_conf
         self.allowed_sync_hosts = [
             h.strip()
             for h in conf.get('allowed_sync_hosts', '127.0.0.1').split(',')
             if h.strip()]
-        self.proxy = conf.get('sync_proxy')
+        self.http_proxies = [
+            a.strip()
+            for a in conf.get('sync_proxy', '').split(',')
+            if a.strip()]
         #: Number of containers with sync turned on that were successfully
         #: synced.
         self.container_syncs = 0
@@ -136,16 +200,44 @@ class ContainerSync(Daemon):
         self.container_failures = 0
         #: Time of last stats report.
         self.reported = time()
-        swift_dir = conf.get('swift_dir', '/etc/swift')
+        self.swift_dir = conf.get('swift_dir', '/etc/swift')
         #: swift.common.ring.Ring for locating containers.
-        self.container_ring = container_ring or Ring(swift_dir,
+        self.container_ring = container_ring or Ring(self.swift_dir,
                                                      ring_name='container')
-        #: swift.common.ring.Ring for locating objects.
-        self.object_ring = object_ring or Ring(swift_dir, ring_name='object')
         self._myips = whataremyips()
         self._myport = int(conf.get('bind_port', 6001))
         swift.common.db.DB_PREALLOCATION = \
             config_true_value(conf.get('db_preallocation', 'f'))
+        self.conn_timeout = float(conf.get('conn_timeout', 5))
+        request_tries = int(conf.get('request_tries') or 3)
+
+        internal_client_conf_path = conf.get('internal_client_conf_path')
+        if not internal_client_conf_path:
+            self.logger.warning(
+                _('Configuration option internal_client_conf_path not '
+                  'defined. Using default configuration, See '
+                  'internal-client.conf-sample for options'))
+            internal_client_conf = ConfigString(ic_conf_body)
+        else:
+            internal_client_conf = internal_client_conf_path
+        try:
+            self.swift = InternalClient(
+                internal_client_conf, 'Swift Container Sync', request_tries)
+        except IOError as err:
+            if err.errno != errno.ENOENT:
+                raise
+            raise SystemExit(
+                _('Unable to load internal client from config: %r (%s)') %
+                (internal_client_conf_path, err))
+
+    def get_object_ring(self, policy_idx):
+        """
+        Get the ring object to use based on its policy.
+
+        :policy_idx: policy index as defined in swift.conf
+        :returns: appropriate ring object
+        """
+        return POLICIES.get_object_ring(policy_idx, self.swift_dir)
 
     def run_forever(self, *args, **kwargs):
         """
@@ -154,9 +246,7 @@ class ContainerSync(Daemon):
         sleep(random() * self.interval)
         while True:
             begin = time()
-            all_locs = audit_location_generator(self.devices,
-                                                container_server.DATADIR,
-                                                '.db',
+            all_locs = audit_location_generator(self.devices, DATADIR, '.db',
                                                 mount_check=self.mount_check,
                                                 logger=self.logger)
             for path, device, partition in all_locs:
@@ -173,8 +263,7 @@ class ContainerSync(Daemon):
         """
         self.logger.info(_('Begin container sync "once" mode'))
         begin = time()
-        all_locs = audit_location_generator(self.devices,
-                                            container_server.DATADIR, '.db',
+        all_locs = audit_location_generator(self.devices, DATADIR, '.db',
                                             mount_check=self.mount_check,
                                             logger=self.logger)
         for path, device, partition in all_locs:
@@ -222,26 +311,27 @@ class ContainerSync(Daemon):
             x, nodes = self.container_ring.get_nodes(info['account'],
                                                      info['container'])
             for ordinal, node in enumerate(nodes):
-                if node['ip'] in self._myips and node['port'] == self._myport:
+                if is_local_device(self._myips, self._myport,
+                                   node['ip'], node['port']):
                     break
             else:
                 return
             if not broker.is_deleted():
                 sync_to = None
-                sync_key = None
+                user_key = None
                 sync_point1 = info['x_container_sync_point1']
                 sync_point2 = info['x_container_sync_point2']
                 for key, (value, timestamp) in broker.metadata.iteritems():
                     if key.lower() == 'x-container-sync-to':
                         sync_to = value
                     elif key.lower() == 'x-container-sync-key':
-                        sync_key = value
-                if not sync_to or not sync_key:
+                        user_key = value
+                if not sync_to or not user_key:
                     self.container_skips += 1
                     self.logger.increment('skips')
                     return
-                sync_to = sync_to.rstrip('/')
-                err = validate_sync_to(sync_to, self.allowed_sync_hosts)
+                err, sync_to, realm, realm_key = validate_sync_to(
+                    sync_to, self.allowed_sync_hosts, self.realms_conf)
                 if err:
                     self.logger.info(
                         _('ERROR %(db_file)s: %(validate_sync_to_err)s'),
@@ -267,8 +357,9 @@ class ContainerSync(Daemon):
                     # This section will attempt to sync previously skipped
                     # rows in case the previous attempts by any of the nodes
                     # didn't succeed.
-                    if not self.container_sync_row(row, sync_to, sync_key,
-                                                   broker, info):
+                    if not self.container_sync_row(
+                            row, sync_to, user_key, broker, info, realm,
+                            realm_key):
                         if not next_sync_point:
                             next_sync_point = sync_point2
                     sync_point2 = row['ROWID']
@@ -289,8 +380,9 @@ class ContainerSync(Daemon):
                     # succeed or in case it failed to do so the first time.
                     if unpack_from('>I', key)[0] % \
                             len(nodes) == ordinal:
-                        self.container_sync_row(row, sync_to, sync_key,
-                                                broker, info)
+                        self.container_sync_row(
+                            row, sync_to, user_key, broker, info, realm,
+                            realm_key)
                     sync_point1 = row['ROWID']
                     broker.set_x_container_sync_points(sync_point1, None)
                 self.container_syncs += 1
@@ -301,28 +393,47 @@ class ContainerSync(Daemon):
             self.logger.exception(_('ERROR Syncing %s'),
                                   broker if broker else path)
 
-    def container_sync_row(self, row, sync_to, sync_key, broker, info):
+    def container_sync_row(self, row, sync_to, user_key, broker, info,
+                           realm, realm_key):
         """
         Sends the update the row indicates to the sync_to container.
 
         :param row: The updated row in the local database triggering the sync
                     update.
         :param sync_to: The URL to the remote container.
-        :param sync_key: The X-Container-Sync-Key to use when sending requests
+        :param user_key: The X-Container-Sync-Key to use when sending requests
                          to the other container.
         :param broker: The local container database broker.
         :param info: The get_info result from the local container database
                      broker.
+        :param realm: The realm from self.realms_conf, if there is one.
+            If None, fallback to using the older allowed_sync_hosts
+            way of syncing.
+        :param realm_key: The realm key from self.realms_conf, if there
+            is one. If None, fallback to using the older
+            allowed_sync_hosts way of syncing.
         :returns: True on success
         """
         try:
             start_time = time()
             if row['deleted']:
                 try:
-                    delete_object(sync_to, name=row['name'],
-                                  headers={'x-timestamp': row['created_at'],
-                                           'x-container-sync-key': sync_key},
-                                  proxy=self.proxy)
+                    headers = {'x-timestamp': row['created_at']}
+                    if realm and realm_key:
+                        nonce = uuid.uuid4().hex
+                        path = urlparse(sync_to).path + '/' + quote(
+                            row['name'])
+                        sig = self.realms_conf.get_sig(
+                            'DELETE', path, headers['x-timestamp'], nonce,
+                            realm_key, user_key)
+                        headers['x-container-sync-auth'] = '%s %s %s' % (
+                            realm, nonce, sig)
+                    else:
+                        headers['x-container-sync-key'] = user_key
+                    delete_object(sync_to, name=row['name'], headers=headers,
+                                  proxy=self.select_http_proxy(),
+                                  logger=self.logger,
+                                  timeout=self.conn_timeout)
                 except ClientException as err:
                     if err.http_status != HTTP_NOT_FOUND:
                         raise
@@ -330,41 +441,41 @@ class ContainerSync(Daemon):
                 self.logger.increment('deletes')
                 self.logger.timing_since('deletes.timing', start_time)
             else:
-                part, nodes = self.object_ring.get_nodes(
-                    info['account'], info['container'],
-                    row['name'])
+                part, nodes = \
+                    self.get_object_ring(info['storage_policy_index']). \
+                    get_nodes(info['account'], info['container'],
+                              row['name'])
                 shuffle(nodes)
                 exc = None
-                looking_for_timestamp = float(row['created_at'])
+                looking_for_timestamp = Timestamp(row['created_at'])
                 timestamp = -1
                 headers = body = None
-                for node in nodes:
-                    try:
-                        these_headers, this_body = direct_get_object(
-                            node, part, info['account'], info['container'],
-                            row['name'], resp_chunk_size=65536)
-                        this_timestamp = float(these_headers['x-timestamp'])
-                        if this_timestamp > timestamp:
-                            timestamp = this_timestamp
-                            headers = these_headers
-                            body = this_body
-                    except ClientException as err:
-                        # If any errors are not 404, make sure we report the
-                        # non-404 one. We don't want to mistakenly assume the
-                        # object no longer exists just because one says so and
-                        # the others errored for some other reason.
-                        if not exc or exc.http_status == HTTP_NOT_FOUND:
-                            exc = err
-                    except (Exception, Timeout) as err:
-                        exc = err
+                # look up for the newest one
+                headers_out = {'X-Newest': True,
+                               'X-Backend-Storage-Policy-Index':
+                               str(info['storage_policy_index'])}
+                try:
+                    source_obj_status, source_obj_info, source_obj_iter = \
+                        self.swift.get_object(info['account'],
+                                              info['container'], row['name'],
+                                              headers=headers_out,
+                                              acceptable_statuses=(2, 4))
+
+                except (Exception, UnexpectedResponse, Timeout) as err:
+                    source_obj_info = {}
+                    source_obj_iter = None
+                    exc = err
+                timestamp = Timestamp(source_obj_info.get(
+                                      'x-timestamp', 0))
+                headers = source_obj_info
+                body = source_obj_iter
                 if timestamp < looking_for_timestamp:
                     if exc:
                         raise exc
                     raise Exception(
-                        _('Unknown exception trying to GET: %(node)r '
+                        _('Unknown exception trying to GET: '
                           '%(account)r %(container)r %(object)r'),
-                        {'node': node, 'part': part,
-                         'account': info['account'],
+                        {'account': info['account'],
                          'container': info['container'],
                          'object': row['name']})
                 for key in ('date', 'last-modified'):
@@ -372,11 +483,24 @@ class ContainerSync(Daemon):
                         del headers[key]
                 if 'etag' in headers:
                     headers['etag'] = headers['etag'].strip('"')
+                if 'content-type' in headers:
+                    headers['content-type'] = clean_content_type(
+                        headers['content-type'])
                 headers['x-timestamp'] = row['created_at']
-                headers['x-container-sync-key'] = sync_key
+                if realm and realm_key:
+                    nonce = uuid.uuid4().hex
+                    path = urlparse(sync_to).path + '/' + quote(row['name'])
+                    sig = self.realms_conf.get_sig(
+                        'PUT', path, headers['x-timestamp'], nonce, realm_key,
+                        user_key)
+                    headers['x-container-sync-auth'] = '%s %s %s' % (
+                        realm, nonce, sig)
+                else:
+                    headers['x-container-sync-key'] = user_key
                 put_object(sync_to, name=row['name'], headers=headers,
                            contents=FileLikeIter(body),
-                           proxy=self.proxy)
+                           proxy=self.select_http_proxy(), logger=self.logger,
+                           timeout=self.conn_timeout)
                 self.container_puts += 1
                 self.logger.increment('puts')
                 self.logger.timing_since('puts.timing', start_time)
@@ -409,3 +533,6 @@ class ContainerSync(Daemon):
             self.logger.increment('failures')
             return False
         return True
+
+    def select_http_proxy(self):
+        return choice(self.http_proxies) if self.http_proxies else None

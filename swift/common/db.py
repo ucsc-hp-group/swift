@@ -23,19 +23,22 @@ from uuid import uuid4
 import sys
 import time
 import errno
+import cPickle as pickle
 from swift import gettext_ as _
 from tempfile import mkstemp
 
 from eventlet import sleep, Timeout
 import sqlite3
 
-from swift.common.utils import json, normalize_timestamp, renamer, \
+from swift.common.constraints import MAX_META_COUNT, MAX_META_OVERALL_SIZE
+from swift.common.utils import json, Timestamp, renamer, \
     mkdirs, lock_parent_directory, fallocate
 from swift.common.exceptions import LockTimeout
+from swift.common.swob import HTTPBadRequest
 
 
 #: Whether calls will be made to preallocate disk space for database files.
-DB_PREALLOCATION = True
+DB_PREALLOCATION = False
 #: Timeout for trying to connect to a DB
 BROKER_TIMEOUT = 25
 #: Pickle protocol to use
@@ -144,7 +147,7 @@ def chexor(old, name, timestamp):
 
     :param old: hex representation of the current DB hash
     :param name: name of the object or container being inserted
-    :param timestamp: timestamp of the new record
+    :param timestamp: internalized timestamp of the new record
     :returns: a hex representation of the new hash value
     """
     if name is None:
@@ -209,17 +212,21 @@ class DatabaseBroker(object):
 
     def __str__(self):
         """
-        Returns a string indentifying the entity under broker to a human.
+        Returns a string identifying the entity under broker to a human.
         The baseline implementation returns a full pathname to a database.
         This is vital for useful diagnostics.
         """
         return self.db_file
 
-    def initialize(self, put_timestamp=None):
+    def initialize(self, put_timestamp=None, storage_policy_index=None):
         """
         Create the DB
 
-        :param put_timestamp: timestamp of initial PUT request
+        The storage_policy_index is passed through to the subclass's
+        ``_initialize`` method.  It is ignored by ``AccountBroker``.
+
+        :param put_timestamp: internalized timestamp of initial PUT request
+        :param storage_policy_index: only required for containers
         """
         if self.db_file == ':memory:':
             tmp_db_file = None
@@ -276,8 +283,9 @@ class DatabaseBroker(object):
             END;
         """)
         if not put_timestamp:
-            put_timestamp = normalize_timestamp(0)
-        self._initialize(conn, put_timestamp)
+            put_timestamp = Timestamp(0).internal
+        self._initialize(conn, put_timestamp,
+                         storage_policy_index=storage_policy_index)
         conn.commit()
         if tmp_db_file:
             conn.close()
@@ -297,9 +305,8 @@ class DatabaseBroker(object):
         """
         Mark the DB as deleted
 
-        :param timestamp: delete timestamp
+        :param timestamp: internalized delete timestamp
         """
-        timestamp = normalize_timestamp(timestamp)
         # first, clear the metadata
         cleared_meta = {}
         for k in self.metadata:
@@ -331,12 +338,12 @@ class DatabaseBroker(object):
                                  self.db_type + 's',
                                  os.path.basename(self.db_dir))
         try:
-            renamer(self.db_dir, quar_path)
+            renamer(self.db_dir, quar_path, fsync=False)
         except OSError as e:
             if e.errno not in (errno.EEXIST, errno.ENOTEMPTY):
                 raise
             quar_path = "%s-%s" % (quar_path, uuid4().hex)
-            renamer(self.db_dir, quar_path)
+            renamer(self.db_dir, quar_path, fsync=False)
         detail = _('Quarantined %s to %s due to %s database') % \
                   (self.db_dir, quar_path, exc_hint)
         self.logger.error(detail)
@@ -420,6 +427,28 @@ class DatabaseBroker(object):
         # Override for additional work when receiving an rsynced db.
         pass
 
+    def _is_deleted(self, conn):
+        """
+        Check if the database is considered deleted
+
+        :param conn: database conn
+
+        :returns: True if the DB is considered to be deleted, False otherwise
+        """
+        raise NotImplementedError()
+
+    def is_deleted(self):
+        """
+        Check if the DB is considered to be deleted.
+
+        :returns: True if the DB is considered to be deleted, False otherwise
+        """
+        if self.db_file != ':memory:' and not os.path.exists(self.db_file):
+            return True
+        self._commit_puts_stale_ok()
+        with self.get() as conn:
+            return self._is_deleted(conn)
+
     def merge_timestamps(self, created_at, put_timestamp, delete_timestamp):
         """
         Used in replication to handle updating timestamps.
@@ -429,11 +458,16 @@ class DatabaseBroker(object):
         :param delete_timestamp: delete timestamp
         """
         with self.get() as conn:
+            old_status = self._is_deleted(conn)
             conn.execute('''
                 UPDATE %s_stat SET created_at=MIN(?, created_at),
                                    put_timestamp=MAX(?, put_timestamp),
                                    delete_timestamp=MAX(?, delete_timestamp)
             ''' % self.db_type, (created_at, put_timestamp, delete_timestamp))
+            if old_status != self._is_deleted(conn):
+                timestamp = Timestamp(time.time())
+                self._update_status_changed_at(conn, timestamp.internal)
+
             conn.commit()
 
     def get_items_since(self, start, count):
@@ -480,45 +514,75 @@ class DatabaseBroker(object):
         with self.get() as conn:
             curs = conn.execute('''
                 SELECT remote_id, sync_point FROM %s_sync
-            ''' % 'incoming' if incoming else 'outgoing')
+            ''' % ('incoming' if incoming else 'outgoing'))
             result = []
             for row in curs:
                 result.append({'remote_id': row[0], 'sync_point': row[1]})
             return result
 
+    def get_max_row(self):
+        query = '''
+            SELECT SQLITE_SEQUENCE.seq
+            FROM SQLITE_SEQUENCE
+            WHERE SQLITE_SEQUENCE.name == '%s'
+            LIMIT 1
+        ''' % (self.db_contains_type)
+        with self.get() as conn:
+            row = conn.execute(query).fetchone()
+        return row[0] if row else -1
+
     def get_replication_info(self):
         """
         Get information about the DB required for replication.
 
-        :returns: dict containing keys: hash, id, created_at, put_timestamp,
-            delete_timestamp, count, max_row, and metadata
+        :returns: dict containing keys from get_info plus max_row and metadata
+
+        Note:: get_info's <db_contains_type>_count is translated to just
+               "count" and metadata is the raw string.
         """
+        info = self.get_info()
+        info['count'] = info.pop('%s_count' % self.db_contains_type)
+        info['metadata'] = self.get_raw_metadata()
+        info['max_row'] = self.get_max_row()
+        return info
+
+    def get_info(self):
         self._commit_puts_stale_ok()
-        query_part1 = '''
-            SELECT hash, id, created_at, put_timestamp, delete_timestamp,
-                %s_count AS count,
-                CASE WHEN SQLITE_SEQUENCE.seq IS NOT NULL
-                    THEN SQLITE_SEQUENCE.seq ELSE -1 END AS max_row, ''' % \
-            self.db_contains_type
-        query_part2 = '''
-            FROM (%s_stat LEFT JOIN SQLITE_SEQUENCE
-                  ON SQLITE_SEQUENCE.name == '%s') LIMIT 1
-        ''' % (self.db_type, self.db_contains_type)
         with self.get() as conn:
-            try:
-                curs = conn.execute(query_part1 + 'metadata' + query_part2)
-            except sqlite3.OperationalError as err:
-                if 'no such column: metadata' not in str(err):
-                    raise
-                curs = conn.execute(query_part1 + "'' as metadata" +
-                                    query_part2)
+            curs = conn.execute('SELECT * from %s_stat' % self.db_type)
             curs.row_factory = dict_factory
             return curs.fetchone()
+
+    def put_record(self, record):
+        if self.db_file == ':memory:':
+            self.merge_items([record])
+            return
+        if not os.path.exists(self.db_file):
+            raise DatabaseConnectionError(self.db_file, "DB doesn't exist")
+        with lock_parent_directory(self.pending_file, self.pending_timeout):
+            pending_size = 0
+            try:
+                pending_size = os.path.getsize(self.pending_file)
+            except OSError as err:
+                if err.errno != errno.ENOENT:
+                    raise
+            if pending_size > PENDING_CAP:
+                self._commit_puts([record])
+            else:
+                with open(self.pending_file, 'a+b') as fp:
+                    # Colons aren't used in base64 encoding; so they are our
+                    # delimiter
+                    fp.write(':')
+                    fp.write(pickle.dumps(
+                        self.make_tuple_for_pickle(record),
+                        protocol=PICKLE_PROTOCOL).encode('base64'))
+                    fp.flush()
 
     def _commit_puts(self, item_list=None):
         """
         Scan for .pending files and commit the found records by feeding them
-        to merge_items().
+        to merge_items(). Assume that lock_parent_directory has already been
+        called.
 
         :param item_list: A list of items to commit in addition to .pending
         """
@@ -526,36 +590,39 @@ class DatabaseBroker(object):
             return
         if item_list is None:
             item_list = []
-        with lock_parent_directory(self.pending_file, self.pending_timeout):
-            self._preallocate()
-            if not os.path.getsize(self.pending_file):
-                if item_list:
-                    self.merge_items(item_list)
-                return
-            with open(self.pending_file, 'r+b') as fp:
-                for entry in fp.read().split(':'):
-                    if entry:
-                        try:
-                            self._commit_puts_load(item_list, entry)
-                        except Exception:
-                            self.logger.exception(
-                                _('Invalid pending entry %(file)s: %(entry)s'),
-                                {'file': self.pending_file, 'entry': entry})
-                if item_list:
-                    self.merge_items(item_list)
-                try:
-                    os.ftruncate(fp.fileno(), 0)
-                except OSError as err:
-                    if err.errno != errno.ENOENT:
-                        raise
+        self._preallocate()
+        if not os.path.getsize(self.pending_file):
+            if item_list:
+                self.merge_items(item_list)
+            return
+        with open(self.pending_file, 'r+b') as fp:
+            for entry in fp.read().split(':'):
+                if entry:
+                    try:
+                        self._commit_puts_load(item_list, entry)
+                    except Exception:
+                        self.logger.exception(
+                            _('Invalid pending entry %(file)s: %(entry)s'),
+                            {'file': self.pending_file, 'entry': entry})
+            if item_list:
+                self.merge_items(item_list)
+            try:
+                os.ftruncate(fp.fileno(), 0)
+            except OSError as err:
+                if err.errno != errno.ENOENT:
+                    raise
 
     def _commit_puts_stale_ok(self):
         """
         Catch failures of _commit_puts() if broker is intended for
         reading of stats, and thus does not care for pending updates.
         """
+        if self.db_file == ':memory:' or not os.path.exists(self.pending_file):
+            return
         try:
-            self._commit_puts()
+            with lock_parent_directory(self.pending_file,
+                                       self.pending_timeout):
+                self._commit_puts()
         except LockTimeout:
             if not self.stale_reads_ok:
                 raise
@@ -565,6 +632,13 @@ class DatabaseBroker(object):
         Unmarshall the :param:entry and append it to :param:item_list.
         This is implemented by a particular broker to be compatible
         with its :func:`merge_items`.
+        """
+        raise NotImplementedError
+
+    def make_tuple_for_pickle(self, record):
+        """
+        Turn this db record dict into the format this service uses for
+        pending pickles.
         """
         raise NotImplementedError
 
@@ -621,13 +695,7 @@ class DatabaseBroker(object):
             with open(self.db_file, 'rb+') as fp:
                 fallocate(fp.fileno(), int(prealloc_size))
 
-    @property
-    def metadata(self):
-        """
-        Returns the metadata dict for the database. The metadata dict values
-        are tuples of (value, timestamp) where the timestamp indicates when
-        that key was set to that value.
-        """
+    def get_raw_metadata(self):
         with self.get() as conn:
             try:
                 metadata = conn.execute('SELECT metadata FROM %s_stat' %
@@ -636,6 +704,16 @@ class DatabaseBroker(object):
                 if 'no such column: metadata' not in str(err):
                     raise
                 metadata = ''
+        return metadata
+
+    @property
+    def metadata(self):
+        """
+        Returns the metadata dict for the database. The metadata dict values
+        are tuples of (value, timestamp) where the timestamp indicates when
+        that key was set to that value.
+        """
+        metadata = self.get_raw_metadata()
         if metadata:
             metadata = json.loads(metadata)
             utf8encodekeys(metadata)
@@ -643,7 +721,35 @@ class DatabaseBroker(object):
             metadata = {}
         return metadata
 
-    def update_metadata(self, metadata_updates):
+    @staticmethod
+    def validate_metadata(metadata):
+        """
+        Validates that metadata_falls within acceptable limits.
+
+        :param metadata: to be validated
+        :raises: HTTPBadRequest if MAX_META_COUNT or MAX_META_OVERALL_SIZE
+                 is exceeded
+        """
+        meta_count = 0
+        meta_size = 0
+        for key, (value, timestamp) in metadata.iteritems():
+            key = key.lower()
+            if value != '' and (key.startswith('x-account-meta') or
+                                key.startswith('x-container-meta')):
+                prefix = 'x-account-meta-'
+                if key.startswith('x-container-meta-'):
+                    prefix = 'x-container-meta-'
+                key = key[len(prefix):]
+                meta_count = meta_count + 1
+                meta_size = meta_size + len(key) + len(value)
+        if meta_count > MAX_META_COUNT:
+            raise HTTPBadRequest('Too many metadata items; max %d'
+                                 % MAX_META_COUNT)
+        if meta_size > MAX_META_OVERALL_SIZE:
+            raise HTTPBadRequest('Total metadata too large; max %d'
+                                 % MAX_META_OVERALL_SIZE)
+
+    def update_metadata(self, metadata_updates, validate_metadata=False):
         """
         Updates the metadata dict for the database. The metadata dict values
         are tuples of (value, timestamp) where the timestamp indicates when
@@ -676,6 +782,8 @@ class DatabaseBroker(object):
                 value, timestamp = value_timestamp
                 if key not in md or timestamp > md[key][1]:
                     md[key] = value_timestamp
+            if validate_metadata:
+                DatabaseBroker.validate_metadata(md)
             conn.execute('UPDATE %s_stat SET metadata = ?' % self.db_type,
                          (json.dumps(md),))
             conn.commit()
@@ -692,7 +800,10 @@ class DatabaseBroker(object):
         :param age_timestamp: max created_at timestamp of object rows to delete
         :param sync_timestamp: max update_at timestamp of sync rows to delete
         """
-        self._commit_puts()
+        if self.db_file != ':memory:' and os.path.exists(self.pending_file):
+            with lock_parent_directory(self.pending_file,
+                                       self.pending_timeout):
+                self._commit_puts()
         with self.get() as conn:
             conn.execute('''
                 DELETE FROM %s WHERE deleted = 1 AND %s < ?
@@ -750,7 +861,7 @@ class DatabaseBroker(object):
         Update the put_timestamp.  Only modifies it if it is greater than
         the current timestamp.
 
-        :param timestamp: put timestamp
+        :param timestamp: internalized put timestamp
         """
         with self.get() as conn:
             conn.execute(
@@ -758,3 +869,21 @@ class DatabaseBroker(object):
                 ' WHERE put_timestamp < ?' % self.db_type,
                 (timestamp, timestamp))
             conn.commit()
+
+    def update_status_changed_at(self, timestamp):
+        """
+        Update the status_changed_at field in the stat table.  Only
+        modifies status_changed_at if the timestamp is greater than the
+        current status_changed_at timestamp.
+
+        :param timestamp: internalized timestamp
+        """
+        with self.get() as conn:
+            self._update_status_changed_at(conn, timestamp)
+            conn.commit()
+
+    def _update_status_changed_at(self, conn, timestamp):
+        conn.execute(
+            'UPDATE %s_stat SET status_changed_at = ?'
+            ' WHERE status_changed_at < ?' % self.db_type,
+            (timestamp, timestamp))

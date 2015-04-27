@@ -1,3 +1,497 @@
+swift (2.3.0)
+
+    * Erasure Code support (beta)
+
+      Swift now supports an erasure-code (EC) storage policy type. This allows
+      deployers to achieve very high durability with less raw capacity as used
+      in replicated storage. However, EC requires more CPU and network
+      resources, so it is not good for every use case. EC is great for storing
+      large, infrequently accessed data in a single region.
+
+      Swift's implementation of erasure codes is meant to be transparent to
+      end users. There is no API difference between replicated storage and
+      EC storage.
+
+      To support erasure codes, Swift now depends on PyECLib and
+      liberasurecode. liberasurecode is a pluggable library that allows for
+      the actual EC algorithm to be implemented in a library of your choosing.
+
+      As a beta release, EC support is nearly fully feature complete, but it
+      is lacking support for some features (like multi-range reads) and has
+      not had a full performance characterization. This feature relies on
+      ssync for durability. Deployers are urged to do extensive testing and
+      not deploy production data using an erasure code storage policy.
+
+      Full docs are at http://swift.openstack.org/overview_erasure_code.html
+
+    * Add support for container TempURL Keys.
+
+    * Make more memcache options configurable. connection_timeout,
+      pool_timeout, tries, and io_timeout are all now configurable.
+
+    * Swift now supports composite tokens. This allows another service to
+      act on behalf of a user, but only with that user's consent.
+      See http://swift.openstack.org/overview_auth.html for more details.
+
+    * Multi-region replication was improved. When replicating data to a
+      different region, only one replica will be pushed per replication
+      cycle. This gives the remote region a chance to replicate the data
+      locally instead of pushing more data over the inter-region network.
+
+    * Internal requests from the ratelimit middleware now properly log a
+      swift_source. See http://swift.openstack.org/logs.html for details.
+
+    * Improved storage policy support for quarantine stats in swift-recon.
+
+    * The proxy log line now includes the request's storage policy index.
+
+    * Ring checker has been added to swift-recon to validate if rings are
+      built correctly. As part of this feature, storage servers have learned
+      the OPTIONS verb.
+
+    * Add support of x-remove- headers for container-sync.
+
+    * Rings now support hostnames instead of just IP addresses.
+
+    * Swift now enforces that the API version on a request is valid. Valid
+      versions are configured via the valid_api_versions setting in swift.conf
+
+    * Various other minor bug fixes and improvements.
+
+swift (2.2.2)
+
+    * Data placement changes
+
+      This release has several major changes to data placement in Swift in
+      order to better handle different deployment patterns. First, with an
+      unbalance-able ring, less partitions will move if the movement doesn't
+      result in any better dispersion across failure domains. Also, empty
+      (partition weight of zero) devices will no longer keep partitions after
+      rebalancing when there is an unbalance-able ring.
+
+      Second, the notion of "overload" has been added to Swift's rings. This
+      allows devices to take some extra partitions (more than would normally
+      be allowed by the device weight) so that smaller and unbalanced clusters
+      will have less data movement between servers, zones, or regions if there
+      is a failure in the cluster.
+
+      Finally, rings have a new metric called "dispersion". This is the
+      percentage of partitions in the ring that have too many replicas in a
+      particular failure domain. For example, if you have three servers in a
+      cluster but two replicas for a partition get placed onto the same
+      server, that partition will count towards the dispersion metric. A
+      lower value is better, and the value can be used to find the proper
+      value for "overload".
+
+      The overload and dispersion metrics have been exposed in the
+      swift-ring-build CLI tools.
+
+      See http://docs.openstack.org/developer/swift/overview_ring.html
+      for more info on how data placement works now.
+
+    * Improve replication of large out-of-sync, out-of-date containers.
+
+    * Added console logging to swift-drive-audit with a new log_to_console
+      config option (default False).
+
+    * Optimize replication when a device and/or partition is specified.
+
+    * Fix dynamic large object manifests getting versioned. This was not
+      intended and did not work. Now it is properly prevented.
+
+    * Fix the GET's response code when there is a missing segment in a
+      large object manifest.
+
+    * Change black/white listing in ratelimit middleware to use sysmeta.
+      Instead of using the config option, operators can set
+      "X-Account-Sysmeta-Global-Write-Ratelimit: WHITELIST" or
+      "X-Account-Sysmeta-Global-Write-Ratelimit: BLACKLIST" on an account to
+      whitelist or blacklist it for ratelimiting. Note: the existing
+      config options continue to work.
+
+    * Use TCP_NODELAY on outgoing connections.
+
+    * Improve object-replicator startup time.
+
+    * Implement OPTIONS verb for storage nodes.
+
+    * Various other minor bug fixes and improvements.
+
+swift (2.2.1)
+
+    * Swift now rejects object names with Unicode surrogates.
+
+    * Return 403 (instead of 413) on unauthorized upload when over account
+      quota.
+
+    * Fix a rare condition when a rebalance could cause swift-ring-builder
+      to crash. This would only happen on old ring files when "rebalance"
+      was the first command run.
+
+    * Storage node error limits now survive a ring reload.
+
+    * Speed up reading and writing xattrs for object metadata by using larger
+      xattr value sizes. The change is moving from 254 byte values to 64KiB
+      values. There is no migration issue with this.
+
+    * Deleted containers beyond the reclaim age are now properly reclaimed.
+
+    * Full Simplified Chinese translation (zh_CN locale) for errors and logs.
+
+    * Container quota is now properly enforced during cross-account COPY.
+
+    * ssync replication now properly uses the configured replication_ip.
+
+    * Fixed issue were ssync did not replicate custom object headers.
+
+    * swift-drive-audit now has the 'unmount_failed_device' config option
+      (default to True) that controls if the process will unmount failed
+      drives or not.
+
+    * swift-drive-audit will now dump drive error rates to a recon file.
+      The file location is controlled by the 'recon_cache_path' config value
+      and it includes each drive and its associated number of errors.
+
+    * When a filesystem does't support xattr, the object server now returns
+      a 507 Insufficient Storage error to the proxy server.
+
+    * Clean up empty account and container partitions directories if they
+      are empty. This keeps the system healthy and prevents a large number
+      of empty directories from slowing down the replication process.
+
+    * Show the sum of every policy's amount of async pendings in swift-recon.
+
+    * Various other minor bug fixes and improvements.
+
+
+swift (2.2.0)
+
+    * Added support for Keystone v3 auth.
+
+      Keystone v3 introduced the concept of "domains" and user names
+      are no longer unique across domains. Swift's Keystone integration
+      now requires that ACLs be set on IDs, which are unique across
+      domains, and further restricts setting new ACLs to only use IDs.
+
+      Please see http://swift.openstack.org/overview_auth.html for
+      more information on configuring Swift and Keystone together.
+
+    * Swift now supports server-side account-to-account copy. Server-
+      side copy in Swift requires the X-Copy-From header (on a PUT)
+      or the Destination header (on a COPY). To initiate an account-to-
+      account copy, the existing header value remains the same, but the
+      X-Copy-From-Account header (on a PUT) or the Destination-Account
+      (on a COPY) are used to indicate the proper account.
+
+    * Limit partition movement when adding a new placement tier.
+
+      When adding a new placement tier (server, zone, or region), Swift
+      previously attempted to move all placement partitions, regardless
+      of the space available on the new tier, to ensure the best possible
+      durability. Unfortunately, this could result in too many partitions
+      being moved all at once to a new tier. Swift's ring-builder now
+      ensures that only the correct number of placement partitions are
+      rebalanced, and thus makes adding capacity to the cluster more
+      efficient.
+
+    * Per storage policy container counts are now reported in an
+      account response headers.
+
+    * Swift will now reject, with a 4xx series response, GET requests
+      with more than 50 ranges, more than 3 overlapping ranges, or more
+      than 8 non-increasing ranges.
+
+    * The bind_port config setting is now required to be explicitly set.
+
+    * The object server can now use splice() for a zero-copy GET
+      response. This feature is enabled with the "splice" config variable
+      in the object server config and defaults to off. Also, this feature
+      only works on recent Linux kernels (AF_ALG sockets must be
+      supported). A zero-copy GET response can significantly reduce CPU
+      requirements for object servers.
+
+    * Added "--no-overlap" option to swift-dispersion populate so that
+      multiple runs of the tool can add coverage without overlapping
+      existing monitored partitions.
+
+    * swift-recon now supports filtering by region.
+
+    * Various other minor bug fixes and improvements.
+
+swift (2.1.0)
+
+    * swift-ring-builder placement was improved to allow gradual addition
+      of new regions without causing a massive migration of data to the new
+      region. The change was to prefer device weight first, then look at
+      failure domains.
+
+    * Logging updates
+
+      - Eliminated "Handoff requested (N)" log spam.
+
+      - Added process pid to the end of storage node log lines.
+
+      - Container auditor now logs a warning if the devices path contains a
+        non-directory.
+
+      - Object daemons now send a user-agent string with their full name.
+
+    * 412 and 416 responses are no longer tracked as errors in the StatsD
+      messages from the backend servers.
+
+    * Parallel object auditor
+
+      The object auditor can now be controlled with a "concurrency" config
+      value that allows multiple auditor processes to run at once. Using
+      multiple parallel auditor processes can speed up the overall auditor
+      cycle time.
+
+    * The object updater will now concurrently update each necessary node
+      in a new greenthread.
+
+    * TempURL updates
+
+      - The default allowed methods have changed to also allow POST and
+        DELETE. The new default list is "GET HEAD PUT POST DELETE".
+
+      - TempURLs for POST now also allow HEAD, matching existing GET and PUT
+        functionality.
+
+      - Added filename*= support to TempURL Content-Disposition response
+        header.
+
+    * X-Delete-At/After can now be used with the FormPost middleware.
+
+    * Make swift-form-signature output a sample form.
+
+    * Add v2 API to list endpoints middleware
+
+      The new API adds better support for storage policies and changes the
+      response from a list of backend urls to a dictionary with the keys
+      "endpoints" and "headers". The endpoints key contains a list of the
+      backend urls, and the headers key is a dictionary of headers to send
+      along with the backend request.
+
+    * Added allow_account_management and account_autocreate values to /info
+      responses.
+
+    * Enable object system metadata on PUTs (Note: POST support is ongoing).
+
+    * Various other minor bug fixes and improvements.
+
+swift (2.0.0)
+
+    * Storage policies
+
+      Storage policies allow deployers to configure multiple object rings
+      and expose them to end users on a per-container basis. Deployers
+      can create policies based on hardware performance, regions, or other
+      criteria and independently choose different replication factors on
+      them. A policy is set on a Swift container at container creation
+      time and cannot be changed.
+
+      Full docs are at http://swift.openstack.org/overview_policies.html
+
+    * Add profiling middleware in Swift
+
+      The profile middleware provides a tool to profile Swift
+      code on the fly and collects statistical data for performance
+      analysis. A native simple Web UI is also provided to help
+      query and visualize the data.
+
+    * Add --quoted option to swift-temp-url
+
+    * swift-recon now supports checking the md5sum of swift.conf, which
+      helps deployers verify configurations are consistent across a cluster.
+
+    * Users can now set the transaction id suffix by passing in
+      a value in the X-Trans-Id-Extra header.
+
+    * New log_max_line_length option caps the maximum length of a log line.
+
+    * Support If-[Un]Modified-Since for object HEAD
+
+    * Added missing constraints and ratelimit parameters to /info
+
+    * Add ability to remove subsections from /info
+
+    * Unify logging for account, container, and object server processes
+      to provide a consistent message format. This change reorders the
+      fields logged for the account server.
+
+    * Add targeted config loading to swift-init. This allows an easier
+      and more explicit way to tell swift-init to run specific server
+      process configurations.
+
+    * Properly quote www-authenticate (CVE-2014-3497)
+
+    * Fix logging issue when services stop on py26.
+
+    * Change the default logged length of the auth token to 16.
+
+    * Explicitly set permissions on generated ring files to 0644
+
+    * Fix file uploads larger than 2GiB in the formpost feature
+
+    * Fixed issue where large objects would fail to download if the
+      auth token expired partway through the download
+
+    * Various other minor bug fixes and improvements
+
+swift (1.13.1)
+
+    * Change the behavior of CORS responses to better match the spec
+
+      A new proxy config variable (strict_cors_mode, default to True)
+      has been added. Setting it to False keeps the old behavior. For
+      an overview of old versus new behavior, please see
+      https://review.openstack.org/#/c/69419/
+
+    * Invert the responsibility of the two instances of proxy-logging in
+      the proxy pipeline
+
+      The first proxy_logging middleware instance to receive a request
+      in the pipeline marks that request as handling it. So now, the
+      left most proxy_logging middleware handles logging for all
+      client requests, and the right most proxy_logging middleware
+      handles all other requests initiated from within the pipeline to
+      its left. This fixes logging related to large object
+      requests not properly recording bandwidth.
+
+    * Added swift-container-info and swift-account-info tools
+
+    * Allow specification of object devices for audit
+
+    * Dynamic large object COPY requests with ?multipart-manifest=get
+      now work as expected
+
+    * When a client is downloading a large object and one of the segment
+      reads gets bad data, Swift will now immediately abort the request.
+
+    * Fix ring-builder crash when a ring partition was assigned to a
+      deleted device, zero-weighted device, and normal device
+
+    * Make probetests work with conf.d configs
+
+    * Various other minor bug fixes and improvements.
+
+swift (1.13.0)
+
+    * Account-level ACLs and ACL format v2
+
+      Accounts now have a new privileged header to represent ACLs or
+      any other form of account-level access control. The value of
+      the header is a JSON dictionary string to be interpreted by the
+      auth system. A reference implementation is given in TempAuth.
+      Please see the full docs at
+      http://swift.openstack.org/overview_auth.html
+
+    * Added a WSGI environment flag to stop swob from always using
+      absolute location. This is useful if middleware needs to use
+      out-of-spec Location headers in a response.
+
+    * Container sync proxies now support simple load balancing
+
+    * Config option to lower the timeout for recoverable object GETs
+
+    * Add a way to ratelimit all writes to an account
+
+    * Allow multiple storage_domain values in cname_lookup middleware
+
+    * Moved all DLO functionality into middleware
+
+      The proxy will automatically insert the dlo middleware at an
+      appropriate place in the pipeline the same way it does with the
+      gatekeeper middleware. Clusters will still support DLOs after upgrade
+      even with an old config file that doesn't mention dlo at all.
+
+    * Remove python-swiftclient dependency
+
+    * Add secondary groups to process user during privilege escalation
+
+    * When logging request headers, it is now possible to specify
+      specifically which headers should be logged
+
+    * Added log_requests config parameter to account and container servers
+      to match the parameter in the object server. This allows a deployer
+      to turn off log messages for these processes.
+
+    * Ensure swift.source is set for DLO/SLO requests
+
+    * Fixed an issue where overwriting segments in a dynamic manifest
+      could cause issues on pipelined requests.
+
+    * Properly handle COPY verb in container quota middleware
+
+    * Improved StaticWeb 404 error message on web-listings and index
+
+    * Various other minor bug fixes and improvements.
+
+swift (1.12.0)
+
+    * Several important pieces of information have been added to /info:
+
+       - Configured constraints are included and allow a client to discover
+         the limits on names and object sizes that the cluster supports.
+
+       - The supported tempurl methods are now included.
+
+       - Static large object constraints are now included.
+
+    * The Last-Modified header value returned will now be the object's
+      timestamp rounded up to the next second. This allows subsequent
+      requests with If-[un]modified-Since to use the Last-Modified
+      value as expected.
+
+    * Non-integer values for if-delete-at headers will now properly
+      report a 400 error instead of a 503.
+
+    * Fix object versioning with non-ASCII container names.
+
+    * Bulk delete with POST now works properly.
+
+    * Generic means for persisting system metadata
+
+      Swift now supports system-level metadata on accounts and
+      containers. System metadata provides a means to store internal
+      custom metadata with associated Swift resources in a safe and
+      secure fashion without actually having to plumb custom metadata
+      through the core swift servers. The new gatekeeper middleware
+      prevents this system metadata from leaking into the request or
+      being set by a client.
+
+    * catch_errors and gatekeeper middleware are now forced into the proxy
+      pipeline if not explicitly referenced.
+
+    * New container sync configuration option, separating the end user
+      from knowing the required end point and adding more secure
+      signed requests. See
+      http://swift.openstack.org/overview_container_sync.html for full
+      information.
+
+    * bulk middleware now can be configured to retry deleting containers.
+
+    * The default yield_frequency used to keep client connections alive
+      during slow bulk requests was reduced from 60 seconds to 10 seconds.
+      While this is a change to a default, it should not affect deployments
+      and there is no migration process needed.
+
+    * Swift processes will attempt to set RLIMIT_NPROC to 8192.
+
+    * Server processes will now exit with a non-zero error code on config
+      errors.
+
+    * Warn if read_affinity is configured but not enabled.
+
+    * Fix checkmount error parsing in swift-recon.
+
+    * Log at warn level when an object is quarantined.
+
+    * Fixed CVE-2014-0006 to avoid a potential timing attack with tempurl.
+
+    * Various other minor bug fixes and improvements.
+
+
 swift (1.11.0)
 
     * Added discoverable capabilities
@@ -116,7 +610,7 @@ swift (1.10.0)
     * Added support for pooling memcache connections
 
     * Added support to replicating handoff partitions first in object
-      replication. Can also configure now many remote nodes a storage node
+      replication. Can also configure how many remote nodes a storage node
       must talk to before removing a local handoff partition.
 
     * Fixed bug where memcache entries would not expire

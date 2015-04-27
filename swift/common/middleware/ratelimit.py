@@ -18,12 +18,21 @@ from swift import gettext_ as _
 import eventlet
 
 from swift.common.utils import cache_from_env, get_logger, register_swift_info
-from swift.proxy.controllers.base import get_container_memcache_key
+from swift.proxy.controllers.base import get_account_info, get_container_info
 from swift.common.memcached import MemcacheConnectionError
 from swift.common.swob import Request, Response
 
 
-def interpret_conf_limits(conf, name_prefix):
+def interpret_conf_limits(conf, name_prefix, info=None):
+    """
+    Parses general parms for rate limits looking for things that
+    start with the provided name_prefix within the provided conf
+    and returns lists for both internal use and for /info
+
+    :param conf: conf dict to parse
+    :param name_prefix: prefix of config parms to look for
+    :param info: set to return extra stuff for /info registration
+    """
     conf_limits = []
     for conf_key in conf:
         if conf_key.startswith(name_prefix):
@@ -33,6 +42,7 @@ def interpret_conf_limits(conf, name_prefix):
 
     conf_limits.sort()
     ratelimits = []
+    conf_limits_info = list(conf_limits)
     while conf_limits:
         cur_size, cur_rate = conf_limits.pop(0)
         if conf_limits:
@@ -48,8 +58,10 @@ def interpret_conf_limits(conf, name_prefix):
             line_func = lambda x: cur_rate
 
         ratelimits.append((cur_size, cur_rate, line_func))
-
-    return ratelimits
+    if info is None:
+        return ratelimits
+    else:
+        return ratelimits, conf_limits_info
 
 
 def get_maxrate(ratelimits, size):
@@ -83,11 +95,10 @@ class RateLimitMiddleware(object):
     BLACK_LIST_SLEEP = 1
 
     def __init__(self, app, conf, logger=None):
+
         self.app = app
-        if logger:
-            self.logger = logger
-        else:
-            self.logger = get_logger(conf, log_route='ratelimit')
+        self.logger = logger or get_logger(conf, log_route='ratelimit')
+        self.memcache_client = None
         self.account_ratelimit = float(conf.get('account_ratelimit', 0))
         self.max_sleep_time_seconds = \
             float(conf.get('max_sleep_time_seconds', 60))
@@ -101,45 +112,46 @@ class RateLimitMiddleware(object):
         self.ratelimit_blacklist = \
             [acc.strip() for acc in
                 conf.get('account_blacklist', '').split(',') if acc.strip()]
-        self.memcache_client = None
         self.container_ratelimits = interpret_conf_limits(
             conf, 'container_ratelimit_')
         self.container_listing_ratelimits = interpret_conf_limits(
             conf, 'container_listing_ratelimit_')
 
-    def get_container_size(self, account_name, container_name):
+    def get_container_size(self, env):
         rv = 0
-        memcache_key = get_container_memcache_key(account_name,
-                                                  container_name)
-        container_info = self.memcache_client.get(memcache_key)
+        container_info = get_container_info(
+            env, self.app, swift_source='RL')
         if isinstance(container_info, dict):
             rv = container_info.get(
                 'object_count', container_info.get('container_size', 0))
         return rv
 
-    def get_ratelimitable_key_tuples(self, req_method, account_name,
-                                     container_name=None, obj_name=None):
+    def get_ratelimitable_key_tuples(self, req, account_name,
+                                     container_name=None, obj_name=None,
+                                     global_ratelimit=None):
         """
         Returns a list of key (used in memcache), ratelimit tuples. Keys
         should be checked in order.
 
-        :param req_method: HTTP method
+        :param req: swob request
         :param account_name: account name from path
         :param container_name: container name from path
         :param obj_name: object name from path
+        :param global_ratelimit: this account has an account wide
+                                 ratelimit on all writes combined
         """
         keys = []
         # COPYs are not limited
+
         if self.account_ratelimit and \
                 account_name and container_name and not obj_name and \
-                req_method in ('PUT', 'DELETE'):
+                req.method in ('PUT', 'DELETE'):
             keys.append(("ratelimit/%s" % account_name,
                          self.account_ratelimit))
 
         if account_name and container_name and obj_name and \
-                req_method in ('PUT', 'DELETE', 'POST'):
-            container_size = self.get_container_size(
-                account_name, container_name)
+                req.method in ('PUT', 'DELETE', 'POST', 'COPY'):
+            container_size = self.get_container_size(req.environ)
             container_rate = get_maxrate(
                 self.container_ratelimits, container_size)
             if container_rate:
@@ -148,15 +160,25 @@ class RateLimitMiddleware(object):
                     container_rate))
 
         if account_name and container_name and not obj_name and \
-                req_method == 'GET':
-            container_size = self.get_container_size(
-                account_name, container_name)
+                req.method == 'GET':
+            container_size = self.get_container_size(req.environ)
             container_rate = get_maxrate(
                 self.container_listing_ratelimits, container_size)
             if container_rate:
                 keys.append((
                     "ratelimit_listing/%s/%s" % (account_name, container_name),
                     container_rate))
+
+        if account_name and req.method in ('PUT', 'DELETE', 'POST', 'COPY'):
+            if global_ratelimit:
+                try:
+                    global_ratelimit = float(global_ratelimit)
+                    if global_ratelimit > 0:
+                        keys.append((
+                            "ratelimit/global-write/%s" % account_name,
+                            global_ratelimit))
+                except ValueError:
+                    pass
 
         return keys
 
@@ -208,18 +230,31 @@ class RateLimitMiddleware(object):
         '''
         if not self.memcache_client:
             return None
-        if account_name in self.ratelimit_blacklist:
+
+        try:
+            account_info = get_account_info(req.environ, self.app,
+                                            swift_source='RL')
+            account_global_ratelimit = \
+                account_info.get('sysmeta', {}).get('global-write-ratelimit')
+        except ValueError:
+            account_global_ratelimit = None
+
+        if account_name in self.ratelimit_whitelist or \
+                account_global_ratelimit == 'WHITELIST':
+            return None
+
+        if account_name in self.ratelimit_blacklist or \
+                account_global_ratelimit == 'BLACKLIST':
             self.logger.error(_('Returning 497 because of blacklisting: %s'),
                               account_name)
             eventlet.sleep(self.BLACK_LIST_SLEEP)
             return Response(status='497 Blacklisted',
                             body='Your account has been blacklisted',
                             request=req)
-        if account_name in self.ratelimit_whitelist:
-            return None
+
         for key, max_rate in self.get_ratelimitable_key_tuples(
-                req.method, account_name, container_name=container_name,
-                obj_name=obj_name):
+                req, account_name, container_name=container_name,
+                obj_name=obj_name, global_ratelimit=account_global_ratelimit):
             try:
                 need_to_sleep = self._get_sleep_time(key, max_rate)
                 if self.log_sleep_time_seconds and \
@@ -274,8 +309,22 @@ def filter_factory(global_conf, **local_conf):
     """
     conf = global_conf.copy()
     conf.update(local_conf)
-    register_swift_info('ratelimit')
+
+    account_ratelimit = float(conf.get('account_ratelimit', 0))
+    max_sleep_time_seconds = \
+        float(conf.get('max_sleep_time_seconds', 60))
+    container_ratelimits, cont_limit_info = interpret_conf_limits(
+        conf, 'container_ratelimit_', info=1)
+    container_listing_ratelimits, cont_list_limit_info = \
+        interpret_conf_limits(conf, 'container_listing_ratelimit_', info=1)
+    # not all limits are exposed (intentionally)
+    register_swift_info('ratelimit',
+                        account_ratelimit=account_ratelimit,
+                        max_sleep_time_seconds=max_sleep_time_seconds,
+                        container_ratelimits=cont_limit_info,
+                        container_listing_ratelimits=cont_list_limit_info)
 
     def limit_filter(app):
         return RateLimitMiddleware(app, conf)
+
     return limit_filter

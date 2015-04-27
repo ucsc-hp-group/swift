@@ -25,13 +25,12 @@ from tempfile import mkstemp
 from eventlet import spawn, patcher, Timeout
 
 import swift.common.db
-from swift.container.backend import ContainerBroker
-from swift.container.server import DATADIR
+from swift.container.backend import ContainerBroker, DATADIR
 from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.ring import Ring
 from swift.common.utils import get_logger, config_true_value, ismount, \
-    dump_recon_cache
+    dump_recon_cache, quorum_size, Timestamp
 from swift.common.daemon import Daemon
 from swift.common.http import is_success, HTTP_INTERNAL_SERVER_ERROR
 
@@ -71,6 +70,14 @@ class ContainerUpdater(Daemon):
             self.account_ring = Ring(self.swift_dir, ring_name='account')
         return self.account_ring
 
+    def _listdir(self, path):
+        try:
+            return os.listdir(path)
+        except OSError as e:
+            self.logger.error(_('ERROR:  Failed to get paths to drive '
+                                'partitions: %s') % e)
+            return []
+
     def get_paths(self):
         """
         Get paths to all of the partitions on each drive to be processed.
@@ -78,7 +85,7 @@ class ContainerUpdater(Daemon):
         :returns: a list of paths
         """
         paths = []
-        for device in os.listdir(self.devices):
+        for device in self._listdir(self.devices):
             dev_path = os.path.join(self.devices, device)
             if self.mount_check and not ismount(dev_path):
                 self.logger.warn(_('%s is not mounted'), device)
@@ -86,7 +93,7 @@ class ContainerUpdater(Daemon):
             con_path = os.path.join(dev_path, DATADIR)
             if not os.path.exists(con_path):
                 continue
-            for partition in os.listdir(con_path):
+            for partition in self._listdir(con_path):
                 paths.append(os.path.join(con_path, partition))
         shuffle(paths)
         return paths
@@ -210,7 +217,7 @@ class ContainerUpdater(Daemon):
         info = broker.get_info()
         # Don't send updates if the container was auto-created since it
         # definitely doesn't have up to date statistics.
-        if float(info['put_timestamp']) <= 0:
+        if Timestamp(info['put_timestamp']) <= 0:
             return
         if self.account_suppressions.get(info['account'], 0) > time.time():
             return
@@ -222,16 +229,14 @@ class ContainerUpdater(Daemon):
             part, nodes = self.get_account_ring().get_nodes(info['account'])
             events = [spawn(self.container_report, node, part, container,
                             info['put_timestamp'], info['delete_timestamp'],
-                            info['object_count'], info['bytes_used'])
+                            info['object_count'], info['bytes_used'],
+                            info['storage_policy_index'])
                       for node in nodes]
             successes = 0
-            failures = 0
             for event in events:
                 if is_success(event.wait()):
                     successes += 1
-                else:
-                    failures += 1
-            if successes > failures:
+            if successes >= quorum_size(len(events)):
                 self.logger.increment('successes')
                 self.successes += 1
                 self.logger.debug(
@@ -258,7 +263,8 @@ class ContainerUpdater(Daemon):
             self.no_changes += 1
 
     def container_report(self, node, part, container, put_timestamp,
-                         delete_timestamp, count, bytes):
+                         delete_timestamp, count, bytes,
+                         storage_policy_index):
         """
         Report container info to an account server.
 
@@ -269,6 +275,7 @@ class ContainerUpdater(Daemon):
         :param delete_timestamp: delete timestamp
         :param count: object count in the container
         :param bytes: bytes used in the container
+        :param storage_policy_index: the policy index for the container
         """
         with ConnectionTimeout(self.conn_timeout):
             try:
@@ -278,6 +285,7 @@ class ContainerUpdater(Daemon):
                     'X-Object-Count': count,
                     'X-Bytes-Used': bytes,
                     'X-Account-Override-Deleted': 'yes',
+                    'X-Backend-Storage-Policy-Index': storage_policy_index,
                     'user-agent': self.user_agent}
                 conn = http_connect(
                     node['ip'], node['port'], node['device'], part,

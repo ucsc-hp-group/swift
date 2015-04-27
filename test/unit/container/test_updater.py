@@ -14,19 +14,20 @@
 # limitations under the License.
 
 import cPickle as pickle
+import mock
 import os
 import unittest
 from contextlib import closing
 from gzip import GzipFile
 from shutil import rmtree
 from tempfile import mkdtemp
+from test.unit import FakeLogger
 
 from eventlet import spawn, Timeout, listen
 
 from swift.common import utils
 from swift.container import updater as container_updater
-from swift.container import server as container_server
-from swift.container.backend import ContainerBroker
+from swift.container.backend import ContainerBroker, DATADIR
 from swift.common.ring import RingData
 from swift.common.utils import normalize_timestamp
 
@@ -84,7 +85,7 @@ class TestContainerUpdater(unittest.TestCase):
             'account_suppression_time': 0
         })
         cu.run_once()
-        containers_dir = os.path.join(self.sda1, container_server.DATADIR)
+        containers_dir = os.path.join(self.sda1, DATADIR)
         os.mkdir(containers_dir)
         cu.run_once()
         self.assert_(os.path.exists(containers_dir))
@@ -92,7 +93,7 @@ class TestContainerUpdater(unittest.TestCase):
         os.mkdir(subdir)
         cb = ContainerBroker(os.path.join(subdir, 'hash.db'), account='a',
                              container='c')
-        cb.initialize(normalize_timestamp(1))
+        cb.initialize(normalize_timestamp(1), 0)
         cu.run_once()
         info = cb.get_info()
         self.assertEquals(info['object_count'], 0)
@@ -158,6 +159,44 @@ class TestContainerUpdater(unittest.TestCase):
         self.assertEquals(info['reported_object_count'], 1)
         self.assertEquals(info['reported_bytes_used'], 3)
 
+    @mock.patch('os.listdir')
+    def test_listdir_with_exception(self, mock_listdir):
+        e = OSError('permission_denied')
+        mock_listdir.side_effect = e
+        cu = container_updater.ContainerUpdater({
+            'devices': self.devices_dir,
+            'mount_check': 'false',
+            'swift_dir': self.testdir,
+            'interval': '1',
+            'concurrency': '1',
+            'node_timeout': '15',
+            'account_suppression_time': 0
+        })
+        cu.logger = FakeLogger()
+        paths = cu.get_paths()
+        self.assertEqual(paths, [])
+        log_lines = cu.logger.get_lines_for_level('error')
+        msg = ('ERROR:  Failed to get paths to drive partitions: '
+               'permission_denied')
+        self.assertEqual(log_lines[0], msg)
+
+    @mock.patch('os.listdir', return_value=['foo', 'bar'])
+    def test_listdir_without_exception(self, mock_listdir):
+        cu = container_updater.ContainerUpdater({
+            'devices': self.devices_dir,
+            'mount_check': 'false',
+            'swift_dir': self.testdir,
+            'interval': '1',
+            'concurrency': '1',
+            'node_timeout': '15',
+            'account_suppression_time': 0
+        })
+        cu.logger = FakeLogger()
+        path = cu._listdir('foo/bar/')
+        self.assertEqual(path, ['foo', 'bar'])
+        log_lines = cu.logger.get_lines_for_level('error')
+        self.assertEqual(len(log_lines), 0)
+
     def test_unicode(self):
         cu = container_updater.ContainerUpdater({
             'devices': self.devices_dir,
@@ -167,13 +206,13 @@ class TestContainerUpdater(unittest.TestCase):
             'concurrency': '1',
             'node_timeout': '15',
         })
-        containers_dir = os.path.join(self.sda1, container_server.DATADIR)
+        containers_dir = os.path.join(self.sda1, DATADIR)
         os.mkdir(containers_dir)
         subdir = os.path.join(containers_dir, 'subdir')
         os.mkdir(subdir)
         cb = ContainerBroker(os.path.join(subdir, 'hash.db'), account='a',
                              container='\xce\xa9')
-        cb.initialize(normalize_timestamp(1))
+        cb.initialize(normalize_timestamp(1), 0)
         cb.put_object('\xce\xa9', normalize_timestamp(2), 3, 'text/plain',
                       '68b329da9893e34099c7d8ad5cb9c940')
 

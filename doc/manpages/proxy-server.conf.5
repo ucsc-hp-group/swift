@@ -265,11 +265,6 @@ rate but better average accuracy. The default is 5.
 .IP \fBaccount_ratelimit\fR
 If set, will limit PUT and DELETE requests to /account_name/container_name. Number is
 in requests per second. If set to 0 means disabled. The default is 0.
-.IP \fBaccount_whitelist\fR
-Comma separated lists of account names that will not be rate limited. The default is ''.
-.IP \fBaccount_blacklist\fR
-Comma separated lists of account names that will not be allowed. Returns a 497 response.
-The default is ''.
 .IP \fBcontainer_ratelimit_size\fR
 When set with container_limit_x = r: for containers of size x, limit requests per second
 to r. Will limit PUT, DELETE, and POST requests to /a/c/o. The default is ''.
@@ -394,7 +389,7 @@ Logging level. The default is INFO.
 .IP "\fB[filter:tempurl]\fR"
 .RE
 
-Note: Put tempurl just before your auth filter(s) in the pipeline
+Note: Put tempurl before slo, dlo, and your auth filter(s) in the pipeline
 
 .RS 3
 .IP \fBincoming_remove_headers\fR
@@ -519,7 +514,7 @@ Chunk size to read from object servers. The default is 8192.
 Chunk size to read from clients. The default is 8192.
 .IP \fBnode_timeout\fR
 Request timeout to external services. The default is 10 seconds.
-.IP \fBclient_timeoutt\fR
+.IP \fBclient_timeout\fR
 Timeout to read one chunk from a client. The default is 60 seconds.
 .IP \fBconn_timeout\fR
 Connection timeout to external services. The default is 0.5 seconds.

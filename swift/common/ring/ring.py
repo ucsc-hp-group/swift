@@ -15,6 +15,7 @@
 
 import array
 import cPickle as pickle
+import inspect
 from collections import defaultdict
 from gzip import GzipFile
 from os.path import getmtime
@@ -24,6 +25,7 @@ import os
 from io import BufferedReader
 from hashlib import md5
 from itertools import chain
+from tempfile import NamedTemporaryFile
 
 from swift.common.utils import hash_path, validate_configuration, json
 from swift.common.ring.utils import tiers_for_dev
@@ -96,11 +98,13 @@ class RingData(object):
         for part2dev_id in ring['replica2part2dev_id']:
             file_obj.write(part2dev_id.tostring())
 
-    def save(self, filename):
+    def save(self, filename, mtime=1300507380.0):
         """
         Serialize this RingData instance to disk.
 
         :param filename: File into which this instance should be serialized.
+        :param mtime: time used to override mtime for gzip, default or None
+                      if the caller wants to include time
         """
         # Override the timestamp so that the same ring data creates
         # the same bytes on disk. This makes a checksum comparison a
@@ -108,12 +112,19 @@ class RingData(object):
         #
         # This only works on Python 2.7; on 2.6, we always get the
         # current time in the gzip output.
-        try:
-            gz_file = GzipFile(filename, 'wb', mtime=1300507380.0)
-        except TypeError:
-            gz_file = GzipFile(filename, 'wb')
+        tempf = NamedTemporaryFile(dir=".", prefix=filename, delete=False)
+        if 'mtime' in inspect.getargspec(GzipFile.__init__).args:
+            gz_file = GzipFile(filename, mode='wb', fileobj=tempf,
+                               mtime=mtime)
+        else:
+            gz_file = GzipFile(filename, mode='wb', fileobj=tempf)
         self.serialize_v1(gz_file)
         gz_file.close()
+        tempf.flush()
+        os.fsync(tempf.fileno())
+        tempf.close()
+        os.chmod(tempf.name, 0o644)
+        os.rename(tempf.name, filename)
 
     def to_dict(self):
         return {'devs': self.devs,
@@ -164,7 +175,7 @@ class Ring(object):
             self._part_shift = ring_data._part_shift
             self._rebuild_tier_data()
 
-            # Do this now, when we know the data has changed, rather then
+            # Do this now, when we know the data has changed, rather than
             # doing it on every call to get_more_nodes().
             regions = set()
             zones = set()
@@ -231,8 +242,8 @@ class Ring(object):
                 dev_id = r2p2d[part]
                 if dev_id not in seen_ids:
                     part_nodes.append(self.devs[dev_id])
-                seen_ids.add(dev_id)
-        return part_nodes
+                    seen_ids.add(dev_id)
+        return [dict(node, index=i) for i, node in enumerate(part_nodes)]
 
     def get_part(self, account, container=None, obj=None):
         """
@@ -280,6 +291,7 @@ class Ring(object):
 
         ======  ===============================================================
         id      unique integer identifier amongst devices
+        index   offset into the primary node list for the partition
         weight  a float of the relative weight of this device as compared to
                 others; this indicates how many partitions the builder will try
                 to assign to this device

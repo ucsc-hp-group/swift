@@ -207,7 +207,7 @@ class MemcacheRing(object):
             pass
         if got_connection:
             # We need to return something to the pool
-            # A new connection will be created the next time it is retreived
+            # A new connection will be created the next time it is retrieved
             self._return_conn(server, None, None)
         now = time.time()
         self._errors[server].append(time.time())
@@ -433,7 +433,7 @@ class MemcacheRing(object):
         """
         Sets multiple key/value pairs in memcache.
 
-        :param mapping: dictonary of keys and values to be set in memcache
+        :param mapping: dictionary of keys and values to be set in memcache
         :param servery_key: key to use in determining which server in the ring
                             is used
         :param serialize: if True, value is serialized with JSON before sending

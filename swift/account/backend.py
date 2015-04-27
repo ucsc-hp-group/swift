@@ -16,17 +16,40 @@
 Pluggable Back-end for Account Server
 """
 
-import os
 from uuid import uuid4
 import time
 import cPickle as pickle
-import errno
 
 import sqlite3
 
-from swift.common.utils import normalize_timestamp, lock_parent_directory
-from swift.common.db import DatabaseBroker, DatabaseConnectionError, \
-    PENDING_CAP, PICKLE_PROTOCOL, utf8encode
+from swift.common.utils import Timestamp
+from swift.common.db import DatabaseBroker, utf8encode
+
+DATADIR = 'accounts'
+
+
+POLICY_STAT_TRIGGER_SCRIPT = """
+    CREATE TRIGGER container_insert_ps AFTER INSERT ON container
+    BEGIN
+        INSERT OR IGNORE INTO policy_stat
+            (storage_policy_index, container_count, object_count, bytes_used)
+            VALUES (new.storage_policy_index, 0, 0, 0);
+        UPDATE policy_stat
+        SET container_count = container_count + (1 - new.deleted),
+            object_count = object_count + new.object_count,
+            bytes_used = bytes_used + new.bytes_used
+        WHERE storage_policy_index = new.storage_policy_index;
+    END;
+    CREATE TRIGGER container_delete_ps AFTER DELETE ON container
+    BEGIN
+        UPDATE policy_stat
+        SET container_count = container_count - (1 - old.deleted),
+            object_count = object_count - old.object_count,
+            bytes_used = bytes_used - old.bytes_used
+        WHERE storage_policy_index = old.storage_policy_index;
+    END;
+
+"""
 
 
 class AccountBroker(DatabaseBroker):
@@ -35,7 +58,7 @@ class AccountBroker(DatabaseBroker):
     db_contains_type = 'container'
     db_reclaim_timestamp = 'delete_timestamp'
 
-    def _initialize(self, conn, put_timestamp):
+    def _initialize(self, conn, put_timestamp, **kwargs):
         """
         Create a brand new account database (tables, indices, triggers, etc.)
 
@@ -47,6 +70,7 @@ class AccountBroker(DatabaseBroker):
                 'Attempting to create a new database with no account set')
         self.create_container_table(conn)
         self.create_account_stat_table(conn, put_timestamp)
+        self.create_policy_stat_table(conn)
 
     def create_container_table(self, conn):
         """
@@ -62,7 +86,8 @@ class AccountBroker(DatabaseBroker):
                 delete_timestamp TEXT,
                 object_count INTEGER,
                 bytes_used INTEGER,
-                deleted INTEGER DEFAULT 0
+                deleted INTEGER DEFAULT 0,
+                storage_policy_index INTEGER DEFAULT 0
             );
 
             CREATE INDEX ix_container_deleted_name ON
@@ -97,7 +122,7 @@ class AccountBroker(DatabaseBroker):
                                     old.delete_timestamp || '-' ||
                                     old.object_count || '-' || old.bytes_used);
             END;
-        """)
+        """ + POLICY_STAT_TRIGGER_SCRIPT)
 
     def create_account_stat_table(self, conn, put_timestamp):
         """
@@ -128,9 +153,32 @@ class AccountBroker(DatabaseBroker):
 
         conn.execute('''
             UPDATE account_stat SET account = ?, created_at = ?, id = ?,
-                   put_timestamp = ?
-            ''', (self.account, normalize_timestamp(time.time()), str(uuid4()),
-                  put_timestamp))
+                   put_timestamp = ?, status_changed_at = ?
+            ''', (self.account, Timestamp(time.time()).internal, str(uuid4()),
+                  put_timestamp, put_timestamp))
+
+    def create_policy_stat_table(self, conn):
+        """
+        Create policy_stat table which is specific to the account DB.
+        Not a part of Pluggable Back-ends, internal to the baseline code.
+
+        :param conn: DB connection object
+        """
+        conn.executescript("""
+            CREATE TABLE policy_stat (
+                storage_policy_index INTEGER PRIMARY KEY,
+                container_count INTEGER DEFAULT 0,
+                object_count INTEGER DEFAULT 0,
+                bytes_used INTEGER DEFAULT 0
+            );
+            INSERT OR IGNORE INTO policy_stat (
+                storage_policy_index, container_count, object_count,
+                bytes_used
+            )
+            SELECT 0, container_count, object_count, bytes_used
+            FROM account_stat
+            WHERE container_count > 0;
+        """)
 
     def get_db_version(self, conn):
         if self._db_version == -1:
@@ -157,16 +205,24 @@ class AccountBroker(DatabaseBroker):
 
     def _commit_puts_load(self, item_list, entry):
         """See :func:`swift.common.db.DatabaseBroker._commit_puts_load`"""
-        (name, put_timestamp, delete_timestamp,
-         object_count, bytes_used, deleted) = \
-            pickle.loads(entry.decode('base64'))
+        loaded = pickle.loads(entry.decode('base64'))
+        # check to see if the update includes policy_index or not
+        (name, put_timestamp, delete_timestamp, object_count, bytes_used,
+         deleted) = loaded[:6]
+        if len(loaded) > 6:
+            storage_policy_index = loaded[6]
+        else:
+            # legacy support during upgrade until first non legacy storage
+            # policy is defined
+            storage_policy_index = 0
         item_list.append(
             {'name': name,
              'put_timestamp': put_timestamp,
              'delete_timestamp': delete_timestamp,
              'object_count': object_count,
              'bytes_used': bytes_used,
-             'deleted': deleted})
+             'deleted': deleted,
+             'storage_policy_index': storage_policy_index})
 
     def empty(self):
         """
@@ -180,8 +236,14 @@ class AccountBroker(DatabaseBroker):
                 'SELECT container_count from account_stat').fetchone()
             return (row[0] == 0)
 
+    def make_tuple_for_pickle(self, record):
+        return (record['name'], record['put_timestamp'],
+                record['delete_timestamp'], record['object_count'],
+                record['bytes_used'], record['deleted'],
+                record['storage_policy_index'])
+
     def put_container(self, name, put_timestamp, delete_timestamp,
-                      object_count, bytes_used):
+                      object_count, bytes_used, storage_policy_index):
         """
         Create a container with the given attributes.
 
@@ -190,6 +252,7 @@ class AccountBroker(DatabaseBroker):
         :param delete_timestamp: delete_timestamp of the container to create
         :param object_count: number of objects in the container
         :param bytes_used: number of bytes used by the container
+        :param storage_policy_index:  the storage policy for this container
         """
         if delete_timestamp > put_timestamp and \
                 object_count in (None, '', 0, '0'):
@@ -200,72 +263,105 @@ class AccountBroker(DatabaseBroker):
                   'delete_timestamp': delete_timestamp,
                   'object_count': object_count,
                   'bytes_used': bytes_used,
-                  'deleted': deleted}
-        if self.db_file == ':memory:':
-            self.merge_items([record])
-            return
-        if not os.path.exists(self.db_file):
-            raise DatabaseConnectionError(self.db_file, "DB doesn't exist")
-        pending_size = 0
-        try:
-            pending_size = os.path.getsize(self.pending_file)
-        except OSError as err:
-            if err.errno != errno.ENOENT:
-                raise
-        if pending_size > PENDING_CAP:
-            self._commit_puts([record])
-        else:
-            with lock_parent_directory(self.pending_file,
-                                       self.pending_timeout):
-                with open(self.pending_file, 'a+b') as fp:
-                    # Colons aren't used in base64 encoding; so they are our
-                    # delimiter
-                    fp.write(':')
-                    fp.write(pickle.dumps(
-                        (name, put_timestamp, delete_timestamp, object_count,
-                         bytes_used, deleted),
-                        protocol=PICKLE_PROTOCOL).encode('base64'))
-                    fp.flush()
+                  'deleted': deleted,
+                  'storage_policy_index': storage_policy_index}
+        self.put_record(record)
 
-    def is_deleted(self):
+    def _is_deleted_info(self, status, container_count, delete_timestamp,
+                         put_timestamp):
         """
-        Check if the account DB is considered to be deleted.
+        Apply delete logic to database info.
 
-        :returns: True if the account DB is considered to be deleted, False
-                  otherwise
+        :returns: True if the DB is considered to be deleted, False otherwise
         """
-        if self.db_file != ':memory:' and not os.path.exists(self.db_file):
-            return True
-        self._commit_puts_stale_ok()
-        with self.get() as conn:
-            row = conn.execute('''
-                SELECT put_timestamp, delete_timestamp, container_count, status
-                FROM account_stat''').fetchone()
-            return row['status'] == 'DELETED' or (
-                row['container_count'] in (None, '', 0, '0') and
-                row['delete_timestamp'] > row['put_timestamp'])
+        return status == 'DELETED' or (
+            container_count in (None, '', 0, '0') and
+            Timestamp(delete_timestamp) > Timestamp(put_timestamp))
+
+    def _is_deleted(self, conn):
+        """
+        Check account_stat table and evaluate info.
+
+        :param conn: database conn
+
+        :returns: True if the DB is considered to be deleted, False otherwise
+        """
+        info = conn.execute('''
+            SELECT put_timestamp, delete_timestamp, container_count, status
+            FROM account_stat''').fetchone()
+        return self._is_deleted_info(**info)
 
     def is_status_deleted(self):
         """Only returns true if the status field is set to DELETED."""
         with self.get() as conn:
             row = conn.execute('''
-                SELECT status
+                SELECT put_timestamp, delete_timestamp, status
                 FROM account_stat''').fetchone()
-            return (row['status'] == "DELETED")
+            return row['status'] == "DELETED" or (
+                row['delete_timestamp'] > row['put_timestamp'])
+
+    def get_policy_stats(self, do_migrations=False):
+        """
+        Get global policy stats for the account.
+
+        :param do_migrations: boolean, if True the policy stat dicts will
+                              always include the 'container_count' key;
+                              otherwise it may be omitted on legacy databases
+                              until they are migrated.
+
+        :returns: dict of policy stats where the key is the policy index and
+                  the value is a dictionary like {'object_count': M,
+                  'bytes_used': N, 'container_count': L}
+        """
+        columns = [
+            'storage_policy_index',
+            'container_count',
+            'object_count',
+            'bytes_used',
+        ]
+
+        def run_query():
+            return (conn.execute('''
+                SELECT %s
+                FROM policy_stat
+                ''' % ', '.join(columns)).fetchall())
+
+        self._commit_puts_stale_ok()
+        info = []
+        with self.get() as conn:
+            try:
+                info = run_query()
+            except sqlite3.OperationalError as err:
+                if "no such column: container_count" in str(err):
+                    if do_migrations:
+                        self._migrate_add_container_count(conn)
+                    else:
+                        columns.remove('container_count')
+                    info = run_query()
+                elif "no such table: policy_stat" not in str(err):
+                    raise
+
+        policy_stats = {}
+        for row in info:
+            stats = dict(row)
+            key = stats.pop('storage_policy_index')
+            policy_stats[key] = stats
+        return policy_stats
 
     def get_info(self):
         """
         Get global data for the account.
 
         :returns: dict with keys: account, created_at, put_timestamp,
-                  delete_timestamp, container_count, object_count,
-                  bytes_used, hash, id
+                  delete_timestamp, status_changed_at, container_count,
+                  object_count, bytes_used, hash, id
         """
         self._commit_puts_stale_ok()
         with self.get() as conn:
             return dict(conn.execute('''
                 SELECT account, created_at,  put_timestamp, delete_timestamp,
-                       container_count, object_count, bytes_used, hash, id
+                       status_changed_at, container_count, object_count,
+                       bytes_used, hash, id
                 FROM account_stat
             ''').fetchone())
 
@@ -357,25 +453,28 @@ class AccountBroker(DatabaseBroker):
 
         :param item_list: list of dictionaries of {'name', 'put_timestamp',
                           'delete_timestamp', 'object_count', 'bytes_used',
-                          'deleted'}
+                          'deleted', 'storage_policy_index'}
         :param source: if defined, update incoming_sync with the source
         """
-        with self.get() as conn:
+        def _really_merge_items(conn):
             max_rowid = -1
+            curs = conn.cursor()
             for rec in item_list:
                 record = [rec['name'], rec['put_timestamp'],
                           rec['delete_timestamp'], rec['object_count'],
-                          rec['bytes_used'], rec['deleted']]
+                          rec['bytes_used'], rec['deleted'],
+                          rec['storage_policy_index']]
                 query = '''
                     SELECT name, put_timestamp, delete_timestamp,
-                           object_count, bytes_used, deleted
+                           object_count, bytes_used, deleted,
+                           storage_policy_index
                     FROM container WHERE name = ?
                 '''
                 if self.get_db_version(conn) >= 1:
                     query += ' AND deleted IN (0, 1)'
-                curs = conn.execute(query, (rec['name'],))
-                curs.row_factory = None
-                row = curs.fetchone()
+                curs_row = curs.execute(query, (rec['name'],))
+                curs_row.row_factory = None
+                row = curs_row.fetchone()
                 if row:
                     row = list(row)
                     for i in xrange(5):
@@ -391,27 +490,115 @@ class AccountBroker(DatabaseBroker):
                         record[5] = 1
                     else:
                         record[5] = 0
-                conn.execute('''
+                curs.execute('''
                     DELETE FROM container WHERE name = ? AND
                                                 deleted IN (0, 1)
                 ''', (record[0],))
-                conn.execute('''
+                curs.execute('''
                     INSERT INTO container (name, put_timestamp,
                         delete_timestamp, object_count, bytes_used,
-                        deleted)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                        deleted, storage_policy_index)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', record)
                 if source:
                     max_rowid = max(max_rowid, rec['ROWID'])
             if source:
                 try:
-                    conn.execute('''
+                    curs.execute('''
                         INSERT INTO incoming_sync (sync_point, remote_id)
                         VALUES (?, ?)
                     ''', (max_rowid, source))
                 except sqlite3.IntegrityError:
-                    conn.execute('''
-                        UPDATE incoming_sync SET sync_point=max(?, sync_point)
+                    curs.execute('''
+                        UPDATE incoming_sync
+                        SET sync_point=max(?, sync_point)
                         WHERE remote_id=?
                     ''', (max_rowid, source))
             conn.commit()
+
+        with self.get() as conn:
+            # create the policy stat table if needed and add spi to container
+            try:
+                _really_merge_items(conn)
+            except sqlite3.OperationalError as err:
+                if 'no such column: storage_policy_index' not in str(err):
+                    raise
+                self._migrate_add_storage_policy_index(conn)
+                _really_merge_items(conn)
+
+    def _migrate_add_container_count(self, conn):
+        """
+        Add the container_count column to the 'policy_stat' table and
+        update it
+
+        :param conn: DB connection object
+        """
+        # add the container_count column
+        curs = conn.cursor()
+        curs.executescript('''
+            DROP TRIGGER container_delete_ps;
+            DROP TRIGGER container_insert_ps;
+            ALTER TABLE policy_stat
+            ADD COLUMN container_count INTEGER DEFAULT 0;
+        ''' + POLICY_STAT_TRIGGER_SCRIPT)
+
+        # keep the simple case simple, if there's only one entry in the
+        # policy_stat table we just copy the total container count from the
+        # account_stat table
+
+        # if that triggers an update then the where changes <> 0 *would* exist
+        # and the insert or replace from the count subqueries won't execute
+
+        curs.executescript("""
+        UPDATE policy_stat
+        SET container_count = (
+            SELECT container_count
+            FROM account_stat)
+        WHERE (
+            SELECT COUNT(storage_policy_index)
+            FROM policy_stat
+        ) <= 1;
+
+        INSERT OR REPLACE INTO policy_stat (
+            storage_policy_index,
+            container_count,
+            object_count,
+            bytes_used
+        )
+        SELECT p.storage_policy_index,
+               c.count,
+               p.object_count,
+               p.bytes_used
+        FROM (
+            SELECT storage_policy_index,
+                   COUNT(*) as count
+            FROM container
+            WHERE deleted = 0
+            GROUP BY storage_policy_index
+        ) c
+        JOIN policy_stat p
+        ON p.storage_policy_index = c.storage_policy_index
+        WHERE NOT EXISTS(
+            SELECT changes() as change
+            FROM policy_stat
+            WHERE change <> 0
+        );
+        """)
+        conn.commit()
+
+    def _migrate_add_storage_policy_index(self, conn):
+        """
+        Add the storage_policy_index column to the 'container' table and
+        set up triggers, creating the policy_stat table if needed.
+
+        :param conn: DB connection object
+        """
+        try:
+            self.create_policy_stat_table(conn)
+        except sqlite3.OperationalError as err:
+            if 'table policy_stat already exists' not in str(err):
+                raise
+        conn.executescript('''
+            ALTER TABLE container
+            ADD COLUMN storage_policy_index INTEGER DEFAULT 0;
+        ''' + POLICY_STAT_TRIGGER_SCRIPT)

@@ -43,11 +43,18 @@ Remove the quota::
     swift -A http://127.0.0.1:8080/auth/v1.0 -U account:reseller -K secret \
 post -m quota-bytes:
 
+The same limitations apply for the account quotas as for the container quotas.
+
+For example, when uploading an object without a content-length header the proxy
+server doesn't know the final size of the currently uploaded object and the
+upload will be allowed if the current account size is within the quota.
+Due to the eventual consistency further uploads might be possible until the
+account size has been updated.
 """
 
-
-from swift.common.swob import HTTPForbidden, HTTPRequestEntityTooLarge, \
-    HTTPBadRequest, wsgify
+from swift.common.constraints import check_copy_from_header
+from swift.common.swob import HTTPForbidden, HTTPBadRequest, \
+    HTTPRequestEntityTooLarge, wsgify
 from swift.common.utils import register_swift_info
 from swift.proxy.controllers.base import get_account_info, get_object_info
 
@@ -96,13 +103,17 @@ class AccountQuotaMiddleware(object):
         if new_quota is not None:
             return HTTPForbidden()
 
-        if obj and request.method == "POST" or not obj:
+        if request.method == "POST" or not obj:
             return self.app
 
         if request.method == 'COPY':
             copy_from = container + '/' + obj
         else:
-            copy_from = request.headers.get('X-Copy-From')
+            if 'x-copy-from' in request.headers:
+                src_cont, src_obj = check_copy_from_header(request)
+                copy_from = "%s/%s" % (src_cont, src_obj)
+            else:
+                copy_from = None
 
         content_length = (request.content_length or 0)
 
@@ -116,8 +127,8 @@ class AccountQuotaMiddleware(object):
         if quota < 0:
             return self.app
 
-        if obj and copy_from:
-            path = '/' + ver + '/' + account + '/' + copy_from.lstrip('/')
+        if copy_from:
+            path = '/' + ver + '/' + account + '/' + copy_from
             object_info = get_object_info(request.environ, self.app, path)
             if not object_info or not object_info['length']:
                 content_length = 0
@@ -126,7 +137,18 @@ class AccountQuotaMiddleware(object):
 
         new_size = int(account_info['bytes']) + content_length
         if quota < new_size:
-            return HTTPRequestEntityTooLarge()
+            resp = HTTPRequestEntityTooLarge(body='Upload exceeds quota.')
+            if 'swift.authorize' in request.environ:
+                orig_authorize = request.environ['swift.authorize']
+
+                def reject_authorize(*args, **kwargs):
+                    aresp = orig_authorize(*args, **kwargs)
+                    if aresp:
+                        return aresp
+                    return resp
+                request.environ['swift.authorize'] = reject_authorize
+            else:
+                return resp
 
         return self.app
 

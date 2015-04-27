@@ -15,6 +15,8 @@
 
 """WSGI tools for use with swift."""
 
+from __future__ import print_function
+
 import errno
 import inspect
 import os
@@ -23,6 +25,7 @@ import time
 import mimetools
 from swift import gettext_ as _
 from StringIO import StringIO
+from textwrap import dedent
 
 import eventlet
 import eventlet.debug
@@ -31,12 +34,15 @@ from paste.deploy import loadwsgi
 from eventlet.green import socket, ssl
 from urllib import unquote
 
-from swift.common import utils
+from swift.common import utils, constraints
 from swift.common.swob import Request
 from swift.common.utils import capture_stdio, disable_fallocate, \
     drop_privileges, get_logger, NullLogger, config_true_value, \
     validate_configuration, get_hub, config_auto_int_value, \
     CloseableChain
+
+# Set maximum line size of message headers to be accepted.
+wsgi.MAX_HEADER_LINE = constraints.MAX_HEADER_SIZE
 
 try:
     import multiprocessing
@@ -91,13 +97,34 @@ def _loadconfigdir(object_type, uri, path, name, relative_to, global_conf):
 loadwsgi._loaders['config_dir'] = _loadconfigdir
 
 
+class ConfigString(NamedConfigLoader):
+    """
+    Wrap a raw config string up for paste.deploy.
+
+    If you give one of these to our loadcontext (e.g. give it to our
+    appconfig) we'll intercept it and get it routed to the right loader.
+    """
+
+    def __init__(self, config_string):
+        self.contents = StringIO(dedent(config_string))
+        self.filename = "string"
+        defaults = {
+            'here': "string",
+            '__file__': "string",
+        }
+        self.parser = loadwsgi.NicerConfigParser("string", defaults=defaults)
+        self.parser.optionxform = str  # Don't lower-case keys
+        self.parser.readfp(self.contents)
+
+
 def wrap_conf_type(f):
     """
     Wrap a function whos first argument is a paste.deploy style config uri,
-    such that you can pass it an un-adorned raw filesystem path and the config
-    directive (either config: or config_dir:) will be added automatically
-    based on the type of filesystem entity at the given path (either a file or
-    directory) before passing it through to the paste.deploy function.
+    such that you can pass it an un-adorned raw filesystem path (or config
+    string) and the config directive (either config:, config_dir:, or
+    config_str:) will be added automatically based on the type of entity
+    (either a file or directory, or if no such entity on the file system -
+    just a string) before passing it through to the paste.deploy function.
     """
     def wrapper(conf_path, *args, **kwargs):
         if os.path.isdir(conf_path):
@@ -128,21 +155,25 @@ def monkey_patch_mimetools():
             self.plisttext = ''
         else:
             orig_parsetype(self)
+    parsetype.patched = True
 
-    mimetools.Message.parsetype = parsetype
+    if not getattr(mimetools.Message.parsetype, 'patched', None):
+        mimetools.Message.parsetype = parsetype
 
 
-def get_socket(conf, default_port=8080):
+def get_socket(conf):
     """Bind socket to bind ip:port in conf
 
     :param conf: Configuration dict to read settings from
-    :param default_port: port to use if not specified in conf
 
     :returns : a socket object as returned from socket.listen or
                ssl.wrap_socket if conf specifies cert_file
     """
-    bind_addr = (conf.get('bind_ip', '0.0.0.0'),
-                 int(conf.get('bind_port', default_port)))
+    try:
+        bind_port = int(conf['bind_port'])
+    except (ValueError, KeyError, TypeError):
+        raise ConfigFilePortError()
+    bind_addr = (conf.get('bind_ip', '0.0.0.0'), bind_port)
     address_family = [addr[0] for addr in socket.getaddrinfo(
         bind_addr[0], bind_addr[1], socket.AF_UNSPEC, socket.SOCK_STREAM)
         if addr[0] in (socket.AF_INET, socket.AF_INET6)][0]
@@ -197,6 +228,47 @@ class RestrictedGreenPool(GreenPool):
             self.waitall()
 
 
+def pipeline_property(name, **kwargs):
+    """
+    Create a property accessor for the given name.  The property will
+    dig through the bound instance on which it was accessed for an
+    attribute "app" and check that object for an attribute of the given
+    name.  If the "app" object does not have such an attribute, it will
+    look for an attribute "app" on THAT object and continue it's search
+    from there.  If the named attribute cannot be found accessing the
+    property will raise AttributeError.
+
+    If a default kwarg is provided you get that instead of the
+    AttributeError.  When found the attribute will be cached on instance
+    with the property accessor using the same name as the attribute
+    prefixed with a leading underscore.
+    """
+
+    cache_attr_name = '_%s' % name
+
+    def getter(self):
+        cached_value = getattr(self, cache_attr_name, None)
+        if cached_value:
+            return cached_value
+        app = self  # first app is on self
+        while True:
+            app = getattr(app, 'app', None)
+            if not app:
+                break
+            try:
+                value = getattr(app, name)
+            except AttributeError:
+                continue
+            setattr(self, cache_attr_name, value)
+            return value
+        if 'default' in kwargs:
+            return kwargs['default']
+        raise AttributeError('No apps in pipeline have a '
+                             '%s attribute' % name)
+
+    return property(getter)
+
+
 class PipelineWrapper(object):
     """
     This class provides a number of utility methods for
@@ -220,7 +292,7 @@ class PipelineWrapper(object):
         :param entry_point_name: entry point of middleware or app (Swift only)
 
         :returns: True if entry_point_name is first in pipeline, False
-        otherwise
+                  otherwise
         """
         try:
             first_ctx = self.context.filter_contexts[0]
@@ -229,26 +301,11 @@ class PipelineWrapper(object):
         return first_ctx.entry_point_name == entry_point_name
 
     def _format_for_display(self, ctx):
-        if ctx.entry_point_name:
-            return ctx.entry_point_name
-        elif inspect.isfunction(ctx.object):
-            # ctx.object is a reference to the actual filter_factory
-            # function, so we pretty-print that. It's not the nice short
-            # entry point, but it beats "<unknown>".
-            #
-            # These happen when, instead of something like
-            #
-            #    use = egg:swift#healthcheck
-            #
-            # you have something like this:
-            #
-            #    paste.filter_factory = \
-            #        swift.common.middleware.healthcheck:filter_factory
-            return "%s:%s" % (inspect.getmodule(ctx.object).__name__,
-                              ctx.object.__name__)
-        else:
-            # No idea what this is
-            return "<unknown context>"
+        # Contexts specified by pipeline= have .name set in NamedConfigLoader.
+        if hasattr(ctx, 'name'):
+            return ctx.name
+        # This should not happen: a foreign context. Let's not crash.
+        return "<unknown>"
 
     def __str__(self):
         parts = [self._format_for_display(ctx)
@@ -269,6 +326,7 @@ class PipelineWrapper(object):
         ctx = loadwsgi.loadcontext(loadwsgi.FILTER, spec,
                                    global_conf=self.context.global_conf)
         ctx.protocol = 'paste.filter_factory'
+        ctx.name = entry_point_name
         return ctx
 
     def index(self, entry_point_name):
@@ -296,23 +354,37 @@ class PipelineWrapper(object):
 
 def loadcontext(object_type, uri, name=None, relative_to=None,
                 global_conf=None):
+    if isinstance(uri, loadwsgi.ConfigLoader):
+        # bypass loadcontext's uri parsing and loader routing and
+        # just directly return the context
+        if global_conf:
+            uri.update_defaults(global_conf, overwrite=False)
+        return uri.get_context(object_type, name, global_conf)
     add_conf_type = wrap_conf_type(lambda x: x)
     return loadwsgi.loadcontext(object_type, add_conf_type(uri), name=name,
                                 relative_to=relative_to,
                                 global_conf=global_conf)
 
 
-def loadapp(conf_file, global_conf):
+def _add_pipeline_properties(app, *names):
+    for property_name in names:
+        if not hasattr(app, property_name):
+            setattr(app.__class__, property_name,
+                    pipeline_property(property_name))
+
+
+def loadapp(conf_file, global_conf=None, allow_modify_pipeline=True):
     """
     Loads a context from a config file, and if the context is a pipeline
     then presents the app with the opportunity to modify the pipeline.
     """
+    global_conf = global_conf or {}
     ctx = loadcontext(loadwsgi.APP, conf_file, global_conf=global_conf)
     if ctx.object_type.name == 'pipeline':
         # give app the opportunity to modify the pipeline context
         app = ctx.app_context.create()
         func = getattr(app, 'modify_wsgi_pipeline', None)
-        if func:
+        if func and allow_modify_pipeline:
             func(PipelineWrapper(ctx))
     return ctx.create()
 
@@ -336,6 +408,10 @@ def run_server(conf, logger, sock, global_conf=None):
     eventlet.patcher.monkey_patch(all=False, socket=True)
     eventlet_debug = config_true_value(conf.get('eventlet_debug', 'no'))
     eventlet.debug.hub_exceptions(eventlet_debug)
+    wsgi_logger = NullLogger()
+    if eventlet_debug:
+        # let eventlet.wsgi.server log to stderr
+        wsgi_logger = None
     # utils.LogAdapter stashes name in server; fallback on unadapted loggers
     if not global_conf:
         if hasattr(logger, 'server'):
@@ -347,7 +423,14 @@ def run_server(conf, logger, sock, global_conf=None):
     max_clients = int(conf.get('max_clients', '1024'))
     pool = RestrictedGreenPool(size=max_clients)
     try:
-        wsgi.server(sock, app, NullLogger(), custom_pool=pool)
+        # Disable capitalizing headers in Eventlet if possible.  This is
+        # necessary for the AWS SDK to work with swift3 middleware.
+        argspec = inspect.getargspec(wsgi.server)
+        if 'capitalize_response_headers' in argspec.args:
+            wsgi.server(sock, app, wsgi_logger, custom_pool=pool,
+                        capitalize_response_headers=False)
+        else:
+            wsgi.server(sock, app, wsgi_logger, custom_pool=pool)
     except socket.error as err:
         if err[0] != errno.EINVAL:
             raise
@@ -368,11 +451,18 @@ def run_wsgi(conf_path, app_section, *args, **kwargs):
         (conf, logger, log_name) = \
             _initrp(conf_path, app_section, *args, **kwargs)
     except ConfigFileError as e:
-        print e
+        print(e)
         return 1
 
     # bind to address and port
-    sock = get_socket(conf, default_port=kwargs.get('default_port', 8080))
+    try:
+        sock = get_socket(conf)
+    except ConfigFilePortError:
+        msg = 'bind_port wasn\'t properly set in the config file. ' \
+              'It must be explicitly set to a valid port number.'
+        logger.error(msg)
+        print(msg)
+        return 1
     # remaining tasks should not require elevated privileges
     drop_privileges(conf.get('user', 'swift'))
 
@@ -443,6 +533,10 @@ def run_wsgi(conf_path, app_section, *args, **kwargs):
 
 
 class ConfigFileError(Exception):
+    pass
+
+
+class ConfigFilePortError(ConfigFileError):
     pass
 
 
@@ -540,54 +634,10 @@ class WSGIContext(object):
         return None
 
 
-def make_pre_authed_request(env, method=None, path=None, body=None,
-                            headers=None, agent='Swift', swift_source=None):
+def make_env(env, method=None, path=None, agent='Swift', query_string=None,
+             swift_source=None):
     """
-    Makes a new swob.Request based on the current env but with the
-    parameters specified. Note that this request will be preauthorized.
-
-    :param env: The WSGI environment to base the new request on.
-    :param method: HTTP method of new request; default is from
-                   the original env.
-    :param path: HTTP path of new request; default is from the
-                 original env. path should be compatible with what you
-                 would send to Request.blank. path should be quoted and it
-                 can include a query string. for example:
-                 '/a%20space?unicode_str%E8%AA%9E=y%20es'
-    :param body: HTTP body of new request; empty by default.
-    :param headers: Extra HTTP headers of new request; None by
-                    default.
-    :param agent: The HTTP user agent to use; default 'Swift'. You
-                  can put %(orig)s in the agent to have it replaced
-                  with the original env's HTTP_USER_AGENT, such as
-                  '%(orig)s StaticWeb'. You also set agent to None to
-                  use the original env's HTTP_USER_AGENT or '' to
-                  have no HTTP_USER_AGENT.
-    :param swift_source: Used to mark the request as originating out of
-                         middleware. Will be logged in proxy logs.
-    :returns: Fresh swob.Request object.
-    """
-    query_string = None
-    path = path or ''
-    if path and '?' in path:
-        path, query_string = path.split('?', 1)
-    newenv = make_pre_authed_env(env, method, path=unquote(path), agent=agent,
-                                 query_string=query_string,
-                                 swift_source=swift_source)
-    if not headers:
-        headers = {}
-    if body:
-        return Request.blank(path, environ=newenv, body=body, headers=headers)
-    else:
-        return Request.blank(path, environ=newenv, headers=headers)
-
-
-def make_pre_authed_env(env, method=None, path=None, agent='Swift',
-                        query_string=None, swift_source=None):
-    """
-    Returns a new fresh WSGI environment with escalated privileges to
-    do backend checks, listings, etc. that the remote user wouldn't
-    be able to accomplish directly.
+    Returns a new fresh WSGI environment.
 
     :param env: The WSGI environment to base the new environment on.
     :param method: The new REQUEST_METHOD or None to use the
@@ -613,9 +663,11 @@ def make_pre_authed_env(env, method=None, path=None, agent='Swift',
     newenv = {}
     for name in ('eventlet.posthooks', 'HTTP_USER_AGENT', 'HTTP_HOST',
                  'PATH_INFO', 'QUERY_STRING', 'REMOTE_USER', 'REQUEST_METHOD',
-                 'SCRIPT_NAME', 'SERVER_NAME', 'SERVER_PORT', 'HTTP_ORIGIN',
+                 'SCRIPT_NAME', 'SERVER_NAME', 'SERVER_PORT',
+                 'HTTP_ORIGIN', 'HTTP_ACCESS_CONTROL_REQUEST_METHOD',
                  'SERVER_PROTOCOL', 'swift.cache', 'swift.source',
-                 'swift.trans_id'):
+                 'swift.trans_id', 'swift.authorize_override',
+                 'swift.authorize'):
         if name in env:
             newenv[name] = env[name]
     if method:
@@ -632,10 +684,70 @@ def make_pre_authed_env(env, method=None, path=None, agent='Swift',
         del newenv['HTTP_USER_AGENT']
     if swift_source:
         newenv['swift.source'] = swift_source
-    newenv['swift.authorize'] = lambda req: None
-    newenv['swift.authorize_override'] = True
-    newenv['REMOTE_USER'] = '.wsgi.pre_authed'
     newenv['wsgi.input'] = StringIO('')
     if 'SCRIPT_NAME' not in newenv:
         newenv['SCRIPT_NAME'] = ''
     return newenv
+
+
+def make_subrequest(env, method=None, path=None, body=None, headers=None,
+                    agent='Swift', swift_source=None, make_env=make_env):
+    """
+    Makes a new swob.Request based on the current env but with the
+    parameters specified.
+
+    :param env: The WSGI environment to base the new request on.
+    :param method: HTTP method of new request; default is from
+                   the original env.
+    :param path: HTTP path of new request; default is from the
+                 original env. path should be compatible with what you
+                 would send to Request.blank. path should be quoted and it
+                 can include a query string. for example:
+                 '/a%20space?unicode_str%E8%AA%9E=y%20es'
+    :param body: HTTP body of new request; empty by default.
+    :param headers: Extra HTTP headers of new request; None by
+                    default.
+    :param agent: The HTTP user agent to use; default 'Swift'. You
+                  can put %(orig)s in the agent to have it replaced
+                  with the original env's HTTP_USER_AGENT, such as
+                  '%(orig)s StaticWeb'. You also set agent to None to
+                  use the original env's HTTP_USER_AGENT or '' to
+                  have no HTTP_USER_AGENT.
+    :param swift_source: Used to mark the request as originating out of
+                         middleware. Will be logged in proxy logs.
+    :param make_env: make_subrequest calls this make_env to help build the
+        swob.Request.
+    :returns: Fresh swob.Request object.
+    """
+    query_string = None
+    path = path or ''
+    if path and '?' in path:
+        path, query_string = path.split('?', 1)
+    newenv = make_env(env, method, path=unquote(path), agent=agent,
+                      query_string=query_string, swift_source=swift_source)
+    if not headers:
+        headers = {}
+    if body:
+        return Request.blank(path, environ=newenv, body=body, headers=headers)
+    else:
+        return Request.blank(path, environ=newenv, headers=headers)
+
+
+def make_pre_authed_env(env, method=None, path=None, agent='Swift',
+                        query_string=None, swift_source=None):
+    """Same as :py:func:`make_env` but with preauthorization."""
+    newenv = make_env(
+        env, method=method, path=path, agent=agent, query_string=query_string,
+        swift_source=swift_source)
+    newenv['swift.authorize'] = lambda req: None
+    newenv['swift.authorize_override'] = True
+    newenv['REMOTE_USER'] = '.wsgi.pre_authed'
+    return newenv
+
+
+def make_pre_authed_request(env, method=None, path=None, body=None,
+                            headers=None, agent='Swift', swift_source=None):
+    """Same as :py:func:`make_subrequest` but with preauthorization."""
+    return make_subrequest(
+        env, method=method, path=path, body=body, headers=headers, agent=agent,
+        swift_source=swift_source, make_env=make_pre_authed_env)

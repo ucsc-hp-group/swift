@@ -2,6 +2,33 @@
 Administrator's Guide
 =====================
 
+-------------------------
+Defining Storage Policies
+-------------------------
+
+Defining your Storage Policies is very easy to do with Swift.  It is important
+that the administrator understand the concepts behind Storage Policies
+before actually creating and using them in order to get the most benefit out
+of the feature and, more importantly, to avoid having to make unnecessary changes
+once a set of policies have been deployed to a cluster.
+
+It is highly recommended that the reader fully read and comprehend
+:doc:`overview_policies` before proceeding with administration of
+policies.  Plan carefully and it is suggested that experimentation be
+done first on a non-production cluster to be certain that the desired
+configuration meets the needs of the users.  See :ref:`upgrade-policy`
+before planning the upgrade of your existing deployment.
+
+Following is a high level view of the very few steps it takes to configure
+policies once you have decided what you want to do:
+
+  #. Define your policies in ``/etc/swift/swift.conf``
+  #. Create the corresponding object rings
+  #. Communicate the names of the Storage Policies to cluster users
+
+For a specific example that takes you through these steps, please see
+:doc:`policies_saio`
+
 ------------------
 Managing the Rings
 ------------------
@@ -32,15 +59,15 @@ For more information see :doc:`overview_ring`.
 Removing a device from the ring::
 
     swift-ring-builder <builder-file> remove <ip_address>/<device_name>
-    
+
 Removing a server from the ring::
 
     swift-ring-builder <builder-file> remove <ip_address>
-    
+
 Adding devices to the ring:
 
 See :ref:`ring-preparing`
-    
+
 See what devices for a server are in the ring::
 
     swift-ring-builder <builder-file> search <ip_address>
@@ -49,7 +76,7 @@ Once you are done with all changes to the ring, the changes need to be
 "committed"::
 
     swift-ring-builder <builder-file> rebalance
-    
+
 Once the new rings are built, they should be pushed out to all the servers
 in the cluster.
 
@@ -60,6 +87,16 @@ of the swift-ring-builder (or other utilities that observe this lock) from
 attempting to write to or read the builder/ring files while operations are in
 progress. This can be useful in environments where ring management has been
 automated but the operator still needs to interact with the rings manually.
+
+If the ring builder is not producing the balances that you are
+expecting, you can gain visibility into what it's doing with the
+``--debug`` flag.::
+
+    swift-ring-builder <builder-file> rebalance --debug
+
+This produces a great deal of output that is mostly useful if you are
+either (a) attempting to fix the ring builder, or (b) filing a bug
+against the ring builder.
 
 -----------------------
 Scripting Ring Creation
@@ -118,15 +155,26 @@ then it is just best to replace the drive, format it, remount it, and let
 replication fill it up.
 
 If the drive can't be replaced immediately, then it is best to leave it
-unmounted, and remove the drive from the ring. This will allow all the
+unmounted, and set the device weight to 0. This will allow all the
 replicas that were on that drive to be replicated elsewhere until the drive
-is replaced.  Once the drive is replaced, it can be re-added to the ring.
+is replaced. Once the drive is replaced, the device weight can be increased
+again. Setting the device weight to 0 instead of removing the drive from the
+ring gives Swift the chance to replicate data from the failing disk too (in case
+it is still possible to read some of the data).
+
+Setting the device weight to 0 (or removing a failed drive from the ring) has
+another benefit: all partitions that were stored on the failed drive are
+distributed over the remaining disks in the cluster, and each disk only needs to
+store a few new partitions. This is much faster compared to replicating all
+partitions to a single, new disk. It decreases the time to recover from a
+degraded number of replicas significantly, and becomes more and more important
+with bigger disks.
 
 -----------------------
 Handling Server Failure
 -----------------------
 
-If a server is having hardware issues, it is a good idea to make sure the 
+If a server is having hardware issues, it is a good idea to make sure the
 swift services are not running.  This will allow Swift to work around the
 failure while you troubleshoot.
 
@@ -149,7 +197,7 @@ Detecting Failed Drives
 
 It has been our experience that when a drive is about to fail, error messages
 will spew into `/var/log/kern.log`.  There is a script called
-`swift-drive-audit` that can be run via cron to watch for bad drives.  If 
+`swift-drive-audit` that can be run via cron to watch for bad drives.  If
 errors are detected, it will unmount the bad drive, so that Swift can
 work around it.  The script takes a configuration file with the following
 settings:
@@ -170,7 +218,7 @@ log_file_pattern    /var/log/kern*  Location of the log file with globbing
                                     pattern to check against device errors
 regex_pattern_X     (see below)     Regular expression patterns to be used to
                                     locate device blocks with errors in the
-                                    log file  
+                                    log file
 ==================  ==============  ===========================================
 
 The default regex pattern used to locate device blocks with errors are
@@ -235,7 +283,7 @@ the cluster. Here is an example of a cluster in perfect health::
     Queried 2621 containers for dispersion reporting, 19s, 0 retries
     100.00% of container copies found (7863 of 7863)
     Sample represents 1.00% of the container partition space
-    
+
     Queried 2619 objects for dispersion reporting, 7s, 0 retries
     100.00% of object copies found (7857 of 7857)
     Sample represents 1.00% of the object partition space
@@ -251,7 +299,7 @@ that has::
     Queried 2621 containers for dispersion reporting, 8s, 0 retries
     100.00% of container copies found (7863 of 7863)
     Sample represents 1.00% of the container partition space
-    
+
     Queried 2619 objects for dispersion reporting, 7s, 0 retries
     There were 1763 partitions missing one copy.
     77.56% of object copies found (6094 of 7857)
@@ -285,7 +333,7 @@ You can also run the report for only containers or objects::
     100.00% of object copies found (7857 of 7857)
     Sample represents 1.00% of the object partition space
 
-Alternatively, the dispersion report can also be output in json format. This 
+Alternatively, the dispersion report can also be output in json format. This
 allows it to be more easily consumed by third party utilities::
 
     $ swift-dispersion-report -j
@@ -499,7 +547,7 @@ Request URI                 Description
 This information can also be queried via the swift-recon command line utility::
 
     fhines@ubuntu:~$ swift-recon -h
-    Usage: 
+    Usage:
             usage: swift-recon <server_type> [-v] [--suppress] [-a] [-r] [-u] [-d]
             [-l] [--md5] [--auditor] [--updater] [--expirer] [--sockstat]
 
@@ -800,7 +848,7 @@ Metric Name                      Description
 `container-sync.deletes`         Count of container database rows sync'ed by
                                  deletion.
 `container-sync.deletes.timing`  Timing data for each container database row
-                                 sychronization via deletion.
+                                 synchronization via deletion.
 `container-sync.puts`            Count of container database rows sync'ed by PUTing.
 `container-sync.puts.timing`     Timing data for each container database row
                                  synchronization via PUTing.
@@ -892,9 +940,9 @@ Metric Name                              Description
 `object-server.PUT.timeouts`             Count of object PUTs which exceeded max_upload_time.
 `object-server.PUT.timing`               Timing data for each PUT request not resulting in an
                                          error.
-`object-server.PUT.<device>.timing`      Timing data per kB transfered (ms/kB) for each 
-                                         non-zero-byte PUT request on each device. 
-                                         Monitoring problematic devices, higher is bad. 
+`object-server.PUT.<device>.timing`      Timing data per kB transferred (ms/kB) for each
+                                         non-zero-byte PUT request on each device.
+                                         Monitoring problematic devices, higher is bad.
 `object-server.GET.errors.timing`        Timing data for GET request errors: bad request,
                                          not mounted, header timestamps before the epoch,
                                          precondition failed.
@@ -1029,6 +1077,14 @@ If you are looking at an object on the server and need more info,
 `swift-object-info` will display the account, container, replica locations
 and metadata of the object.
 
+If you are looking at a container on the server and need more info,
+`swift-container-info` will display all the information like the account,
+container, replica locations and metadata of the container.
+
+If you are looking at an account on the server and need more info,
+`swift-account-info` will display the account, replica locations
+and metadata of the account.
+
 If you want to audit the data for an account, `swift-account-audit` can be
 used to crawl the account, checking that all containers and objects can be
 found.
@@ -1038,7 +1094,7 @@ Managing Services
 -----------------
 
 Swift services are generally managed with `swift-init`. the general usage is
-``swift-init <service> <command>``, where service is the swift service to 
+``swift-init <service> <command>``, where service is the swift service to
 manage (for example object, container, account, proxy) and command is one of:
 
 ==========  ===============================================
@@ -1051,9 +1107,17 @@ shutdown    Attempt to gracefully shutdown the service
 reload      Attempt to gracefully restart the service
 ==========  ===============================================
 
-A graceful shutdown or reload will finish any current requests before 
-completely stopping the old service.  There is also a special case of 
+A graceful shutdown or reload will finish any current requests before
+completely stopping the old service.  There is also a special case of
 `swift-init all <command>`, which will run the command for all swift services.
+
+In cases where there are multiple configs for a service, a specific config
+can be managed with ``swift-init <service>.<config> <command>``.
+For example, when a separate replication network is used, there might be
+`/etc/swift/object-server/public.conf` for the object server and
+`/etc/swift/object-server/replication.conf` for the replication services.
+In this case, the replication services could be restarted with
+``swift-init object-server.replication restart``.
 
 --------------
 Object Auditor
@@ -1066,6 +1130,13 @@ an extra, less rate limited sweep to check for these specific files. You can
 run this command as follows:
 `swift-object-auditor /path/to/object-server/config/file.conf once -z 1000`
 "-z" means to only check for zero-byte files at 1000 files per second.
+
+At times it is useful to be able to run the object auditor on a specific
+device or set of devices.  You can run the object-auditor as follows:
+swift-object-auditor /path/to/object-server/config/file.conf once --devices=sda,sdb
+
+This will run the object auditor on only the sda and sdb devices. This param
+accepts a comma separated list of values.
 
 -----------------
 Object Replicator
@@ -1086,7 +1157,7 @@ Swift Orphans
 
 Swift Orphans are processes left over after a reload of a Swift server.
 
-For example, when upgrading a proxy server you would probaby finish
+For example, when upgrading a proxy server you would probably finish
 with a `swift-init proxy-server reload` or `/etc/init.d/swift-proxy
 reload`. This kills the parent proxy server process and leaves the
 child processes running to finish processing whatever requests they
@@ -1164,3 +1235,11 @@ following:
 
 See :ref:`custom-logger-hooks-label` for sample use cases.
 
+------------------------
+Securing OpenStack Swift
+------------------------
+
+Please refer to the security guides at:
+
+* http://docs.openstack.org/sec/
+* http://docs.openstack.org/security-guide/content/object-storage.html

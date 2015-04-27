@@ -14,12 +14,23 @@
 # limitations under the License.
 
 import json
+import mock
 from StringIO import StringIO
 import unittest
 from urllib import quote
 import zlib
+from textwrap import dedent
+import os
 
+from test.unit import FakeLogger
+import eventlet
+from eventlet.green import urllib2
 from swift.common import internal_client
+from swift.common import swob
+from swift.common.storage_policy import StoragePolicy
+
+from test.unit import with_tempdir, write_fake_ring, patch_policies
+from test.unit.common.middleware.helpers import FakeSwift
 
 
 def not_sleep(seconds):
@@ -46,6 +57,21 @@ def make_path(account, container=None, obj=None):
     return path
 
 
+def make_path_info(account, container=None, obj=None):
+    # FakeSwift keys on PATH_INFO - which is *encoded* but unquoted
+    path = '/v1/%s' % '/'.join(
+        p for p in (account, container, obj) if p)
+    return path.encode('utf-8')
+
+
+def get_client_app():
+    app = FakeSwift()
+    with mock.patch('swift.common.internal_client.loadapp',
+                    new=lambda *args, **kwargs: app):
+        client = internal_client.InternalClient({}, 'test', 1)
+    return client, app
+
+
 class InternalClient(internal_client.InternalClient):
     def __init__(self):
         pass
@@ -60,7 +86,8 @@ class GetMetadataInternalClient(internal_client.InternalClient):
         self.get_metadata_called = 0
         self.metadata = 'some_metadata'
 
-    def _get_metadata(self, path, metadata_prefix, acceptable_statuses=None):
+    def _get_metadata(self, path, metadata_prefix, acceptable_statuses=None,
+                      headers=None):
         self.get_metadata_called += 1
         self.test.assertEquals(self.path, path)
         self.test.assertEquals(self.metadata_prefix, metadata_prefix)
@@ -176,6 +203,53 @@ class TestCompressingfileReader(unittest.TestCase):
 
 
 class TestInternalClient(unittest.TestCase):
+
+    @mock.patch('swift.common.utils.HASH_PATH_SUFFIX', new='endcap')
+    @with_tempdir
+    def test_load_from_config(self, tempdir):
+        conf_path = os.path.join(tempdir, 'interal_client.conf')
+        conf_body = """
+        [DEFAULT]
+        swift_dir = %s
+
+        [pipeline:main]
+        pipeline = catch_errors cache proxy-server
+
+        [app:proxy-server]
+        use = egg:swift#proxy
+        auto_create_account_prefix = -
+
+        [filter:cache]
+        use = egg:swift#memcache
+
+        [filter:catch_errors]
+        use = egg:swift#catch_errors
+        """ % tempdir
+        with open(conf_path, 'w') as f:
+            f.write(dedent(conf_body))
+        account_ring_path = os.path.join(tempdir, 'account.ring.gz')
+        write_fake_ring(account_ring_path)
+        container_ring_path = os.path.join(tempdir, 'container.ring.gz')
+        write_fake_ring(container_ring_path)
+        object_ring_path = os.path.join(tempdir, 'object.ring.gz')
+        write_fake_ring(object_ring_path)
+        with patch_policies([StoragePolicy(0, 'legacy', True)]):
+            client = internal_client.InternalClient(conf_path, 'test', 1)
+            self.assertEqual(client.account_ring,
+                             client.app.app.app.account_ring)
+            self.assertEqual(client.account_ring.serialized_path,
+                             account_ring_path)
+            self.assertEqual(client.container_ring,
+                             client.app.app.app.container_ring)
+            self.assertEqual(client.container_ring.serialized_path,
+                             container_ring_path)
+            object_ring = client.app.app.app.get_object_ring(0)
+            self.assertEqual(client.get_object_ring(0),
+                             object_ring)
+            self.assertEqual(object_ring.serialized_path,
+                             object_ring_path)
+            self.assertEquals(client.auto_create_account_prefix, '-')
+
     def test_init(self):
         class App(object):
             def __init__(self, test, conf_path):
@@ -183,9 +257,10 @@ class TestInternalClient(unittest.TestCase):
                 self.conf_path = conf_path
                 self.load_called = 0
 
-            def load(self, uri):
+            def load(self, uri, allow_modify_pipeline=True):
                 self.load_called += 1
-                self.test.assertEquals('config:' + conf_path, uri)
+                self.test.assertEquals(conf_path, uri)
+                self.test.assertFalse(allow_modify_pipeline)
                 return self
 
         conf_path = 'some_path'
@@ -258,6 +333,24 @@ class TestInternalClient(unittest.TestCase):
 
         self.assertEquals(3, client.sleep_called)
         self.assertEquals(4, client.tries)
+
+    def test_base_request_timeout(self):
+        # verify that base_request passes timeout arg on to urlopen
+        body = {"some": "content"}
+
+        class FakeConn(object):
+            def read(self):
+                return json.dumps(body)
+
+        for timeout in (0.0, 42.0, None):
+            mocked_func = 'swift.common.internal_client.urllib2.urlopen'
+            with mock.patch(mocked_func) as mock_urlopen:
+                mock_urlopen.side_effect = [FakeConn()]
+                sc = internal_client.SimpleClient('http://0.0.0.0/')
+                _, resp_body = sc.base_request('GET', timeout=timeout)
+                mock_urlopen.assert_called_once_with(mock.ANY, timeout=timeout)
+                # sanity check
+                self.assertEquals(body, resp_body)
 
     def test_make_request_method_path_headers(self):
         class InternalClient(internal_client.InternalClient):
@@ -424,21 +517,24 @@ class TestInternalClient(unittest.TestCase):
         self.assertEquals(1, client.make_request_called)
 
     def test_get_metadata_invalid_status(self):
-        class Response(object):
-            def __init__(self):
-                self.status_int = 404
-                self.headers = {'some_key': 'some_value'}
+        class FakeApp(object):
+
+            def __call__(self, environ, start_response):
+                start_response('404 Not Found', [('x-foo', 'bar')])
+                return ['nope']
 
         class InternalClient(internal_client.InternalClient):
             def __init__(self):
-                pass
-
-            def make_request(self, *a, **kw):
-                return Response()
+                self.user_agent = 'test'
+                self.request_tries = 1
+                self.app = FakeApp()
 
         client = InternalClient()
-        metadata = client._get_metadata('path')
-        self.assertEquals({}, metadata)
+        self.assertRaises(internal_client.UnexpectedResponse,
+                          client._get_metadata, 'path')
+        metadata = client._get_metadata('path', metadata_prefix='x-',
+                                        acceptable_statuses=(4,))
+        self.assertEqual(metadata, {'foo': 'bar'})
 
     def test_make_path(self):
         account, container, obj = path_parts()
@@ -649,6 +745,26 @@ class TestInternalClient(unittest.TestCase):
         self.assertEquals(client.metadata, metadata)
         self.assertEquals(1, client.get_metadata_called)
 
+    def test_get_metadadata_with_acceptable_status(self):
+        account, container, obj = path_parts()
+        path = make_path_info(account)
+        client, app = get_client_app()
+        resp_headers = {'some-important-header': 'some value'}
+        app.register('GET', path, swob.HTTPOk, resp_headers)
+        metadata = client.get_account_metadata(
+            account, acceptable_statuses=(2, 4))
+        self.assertEqual(metadata['some-important-header'],
+                         'some value')
+        app.register('GET', path, swob.HTTPNotFound, resp_headers)
+        metadata = client.get_account_metadata(
+            account, acceptable_statuses=(2, 4))
+        self.assertEqual(metadata['some-important-header'],
+                         'some value')
+        app.register('GET', path, swob.HTTPServerError, resp_headers)
+        self.assertRaises(internal_client.UnexpectedResponse,
+                          client.get_account_metadata, account,
+                          acceptable_statuses=(2, 4))
+
     def test_set_account_metadata(self):
         account, container, obj = path_parts()
         path = make_path(account)
@@ -819,6 +935,47 @@ class TestInternalClient(unittest.TestCase):
         self.assertEquals(client.metadata, metadata)
         self.assertEquals(1, client.get_metadata_called)
 
+    def test_get_metadata_extra_headers(self):
+        class InternalClient(internal_client.InternalClient):
+            def __init__(self):
+                self.app = self.fake_app
+                self.user_agent = 'some_agent'
+                self.request_tries = 3
+
+            def fake_app(self, env, start_response):
+                self.req_env = env
+                start_response('200 Ok', [('Content-Length', '0')])
+                return []
+
+        client = InternalClient()
+        headers = {'X-Foo': 'bar'}
+        client.get_object_metadata('account', 'container', 'obj',
+                                   headers=headers)
+        self.assertEqual(client.req_env['HTTP_X_FOO'], 'bar')
+
+    def test_get_object(self):
+        account, container, obj = path_parts()
+        path_info = make_path_info(account, container, obj)
+        client, app = get_client_app()
+        headers = {'foo': 'bar'}
+        body = 'some_object_body'
+        app.register('GET', path_info, swob.HTTPOk, headers, body)
+        req_headers = {'x-important-header': 'some_important_value'}
+        status_int, resp_headers, obj_iter = client.get_object(
+            account, container, obj, req_headers)
+        self.assertEqual(status_int // 100, 2)
+        for k, v in headers.items():
+            self.assertEqual(v, resp_headers[k])
+        self.assertEqual(''.join(obj_iter), body)
+        self.assertEqual(resp_headers['content-length'], str(len(body)))
+        self.assertEqual(app.call_count, 1)
+        req_headers.update({
+            'host': 'localhost:80',  # from swob.Request.blank
+            'user-agent': 'test',   # from InternalClient.make_request
+        })
+        self.assertEqual(app.calls_with_headers, [(
+            'GET', path_info, swob.HeaderKeyDict(req_headers))])
+
     def test_iter_object_lines(self):
         class InternalClient(internal_client.InternalClient):
             def __init__(self, lines):
@@ -918,6 +1075,236 @@ class TestInternalClient(unittest.TestCase):
         client = InternalClient(self, path, headers, fobj)
         client.upload_object(fobj, account, container, obj, headers)
         self.assertEquals(1, client.make_request_called)
+
+    def test_upload_object_not_chunked(self):
+        class InternalClient(internal_client.InternalClient):
+            def __init__(self, test, path, headers, fobj):
+                self.test = test
+                self.path = path
+                self.headers = headers
+                self.fobj = fobj
+                self.make_request_called = 0
+
+            def make_request(
+                    self, method, path, headers, acceptable_statuses,
+                    body_file=None):
+                self.make_request_called += 1
+                self.test.assertEquals(self.path, path)
+                exp_headers = dict(self.headers)
+                self.test.assertEquals(exp_headers, headers)
+                self.test.assertEquals(self.fobj, fobj)
+
+        fobj = 'some_fobj'
+        account, container, obj = path_parts()
+        path = make_path(account, container, obj)
+        headers = {'key': 'value', 'Content-Length': len(fobj)}
+
+        client = InternalClient(self, path, headers, fobj)
+        client.upload_object(fobj, account, container, obj, headers)
+        self.assertEquals(1, client.make_request_called)
+
+
+class TestGetAuth(unittest.TestCase):
+    @mock.patch('eventlet.green.urllib2.urlopen')
+    @mock.patch('eventlet.green.urllib2.Request')
+    def test_ok(self, request, urlopen):
+        def getheader(name):
+            d = {'X-Storage-Url': 'url', 'X-Auth-Token': 'token'}
+            return d.get(name)
+        urlopen.return_value.info.return_value.getheader = getheader
+
+        url, token = internal_client.get_auth(
+            'http://127.0.0.1', 'user', 'key')
+
+        self.assertEqual(url, "url")
+        self.assertEqual(token, "token")
+        request.assert_called_with('http://127.0.0.1')
+        request.return_value.add_header.assert_any_call('X-Auth-User', 'user')
+        request.return_value.add_header.assert_any_call('X-Auth-Key', 'key')
+
+    def test_invalid_version(self):
+        self.assertRaises(SystemExit, internal_client.get_auth,
+                          'http://127.0.0.1', 'user', 'key', auth_version=2.0)
+
+
+mock_time_value = 1401224049.98
+
+
+def mock_time():
+    global mock_time_value
+    mock_time_value += 1
+    return mock_time_value
+
+
+class TestSimpleClient(unittest.TestCase):
+
+    @mock.patch('eventlet.green.urllib2.urlopen')
+    @mock.patch('eventlet.green.urllib2.Request')
+    @mock.patch('swift.common.internal_client.time', mock_time)
+    def test_get(self, request, urlopen):
+        # basic GET request, only url as kwarg
+        request.return_value.get_type.return_value = "http"
+        urlopen.return_value.read.return_value = ''
+        urlopen.return_value.getcode.return_value = 200
+        urlopen.return_value.info.return_value = {'content-length': '345'}
+        sc = internal_client.SimpleClient(url='http://127.0.0.1')
+        logger = FakeLogger()
+        retval = sc.retry_request(
+            'GET', headers={'content-length': '123'}, logger=logger)
+        self.assertEqual(urlopen.call_count, 1)
+        request.assert_called_with('http://127.0.0.1?format=json',
+                                   headers={'content-length': '123'},
+                                   data=None)
+        self.assertEqual([None, None], retval)
+        self.assertEqual('GET', request.return_value.get_method())
+        self.assertEqual(logger.log_dict['debug'], [(
+            ('-> 2014-05-27T20:54:11 GET http://127.0.0.1%3Fformat%3Djson 200 '
+             '123 345 1401224050.98 1401224051.98 1.0 -',), {})])
+
+        # Check if JSON is decoded
+        urlopen.return_value.read.return_value = '{}'
+        retval = sc.retry_request('GET')
+        self.assertEqual([None, {}], retval)
+
+        # same as above, now with token
+        sc = internal_client.SimpleClient(url='http://127.0.0.1',
+                                          token='token')
+        retval = sc.retry_request('GET')
+        request.assert_called_with('http://127.0.0.1?format=json',
+                                   headers={'X-Auth-Token': 'token'},
+                                   data=None)
+        self.assertEqual([None, {}], retval)
+
+        # same as above, now with prefix
+        sc = internal_client.SimpleClient(url='http://127.0.0.1',
+                                          token='token')
+        retval = sc.retry_request('GET', prefix="pre_")
+        request.assert_called_with('http://127.0.0.1?format=json&prefix=pre_',
+                                   headers={'X-Auth-Token': 'token'},
+                                   data=None)
+        self.assertEqual([None, {}], retval)
+
+        # same as above, now with container name
+        retval = sc.retry_request('GET', container='cont')
+        request.assert_called_with('http://127.0.0.1/cont?format=json',
+                                   headers={'X-Auth-Token': 'token'},
+                                   data=None)
+        self.assertEqual([None, {}], retval)
+
+        # same as above, now with object name
+        retval = sc.retry_request('GET', container='cont', name='obj')
+        request.assert_called_with('http://127.0.0.1/cont/obj',
+                                   headers={'X-Auth-Token': 'token'},
+                                   data=None)
+        self.assertEqual([None, {}], retval)
+
+    @mock.patch('eventlet.green.urllib2.urlopen')
+    @mock.patch('eventlet.green.urllib2.Request')
+    def test_get_with_retries_all_failed(self, request, urlopen):
+        # Simulate a failing request, ensure retries done
+        request.return_value.get_type.return_value = "http"
+        urlopen.side_effect = urllib2.URLError('')
+        sc = internal_client.SimpleClient(url='http://127.0.0.1', retries=1)
+        with mock.patch('swift.common.internal_client.sleep') as mock_sleep:
+            self.assertRaises(urllib2.URLError, sc.retry_request, 'GET')
+        self.assertEqual(mock_sleep.call_count, 1)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(urlopen.call_count, 2)
+
+    @mock.patch('eventlet.green.urllib2.urlopen')
+    @mock.patch('eventlet.green.urllib2.Request')
+    def test_get_with_retries(self, request, urlopen):
+        # First request fails, retry successful
+        request.return_value.get_type.return_value = "http"
+        mock_resp = mock.MagicMock()
+        mock_resp.read.return_value = ''
+        urlopen.side_effect = [urllib2.URLError(''), mock_resp]
+        sc = internal_client.SimpleClient(url='http://127.0.0.1', retries=1,
+                                          token='token')
+
+        with mock.patch('swift.common.internal_client.sleep') as mock_sleep:
+            retval = sc.retry_request('GET')
+        self.assertEqual(mock_sleep.call_count, 1)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(urlopen.call_count, 2)
+        request.assert_called_with('http://127.0.0.1?format=json', data=None,
+                                   headers={'X-Auth-Token': 'token'})
+        self.assertEqual([None, None], retval)
+        self.assertEqual(sc.attempts, 2)
+
+    @mock.patch('eventlet.green.urllib2.urlopen')
+    def test_get_with_retries_param(self, mock_urlopen):
+        mock_response = mock.MagicMock()
+        mock_response.read.return_value = ''
+        mock_urlopen.side_effect = internal_client.httplib.BadStatusLine('')
+        c = internal_client.SimpleClient(url='http://127.0.0.1', token='token')
+        self.assertEqual(c.retries, 5)
+
+        # first without retries param
+        with mock.patch('swift.common.internal_client.sleep') as mock_sleep:
+            self.assertRaises(internal_client.httplib.BadStatusLine,
+                              c.retry_request, 'GET')
+        self.assertEqual(mock_sleep.call_count, 5)
+        self.assertEqual(mock_urlopen.call_count, 6)
+        # then with retries param
+        mock_urlopen.reset_mock()
+        with mock.patch('swift.common.internal_client.sleep') as mock_sleep:
+            self.assertRaises(internal_client.httplib.BadStatusLine,
+                              c.retry_request, 'GET', retries=2)
+        self.assertEqual(mock_sleep.call_count, 2)
+        self.assertEqual(mock_urlopen.call_count, 3)
+        # and this time with a real response
+        mock_urlopen.reset_mock()
+        mock_urlopen.side_effect = [internal_client.httplib.BadStatusLine(''),
+                                    mock_response]
+        with mock.patch('swift.common.internal_client.sleep') as mock_sleep:
+            retval = c.retry_request('GET', retries=1)
+        self.assertEqual(mock_sleep.call_count, 1)
+        self.assertEqual(mock_urlopen.call_count, 2)
+        self.assertEqual([None, None], retval)
+
+    def test_proxy(self):
+        running = True
+
+        def handle(sock):
+            while running:
+                try:
+                    with eventlet.Timeout(0.1):
+                        (conn, addr) = sock.accept()
+                except eventlet.Timeout:
+                    continue
+                else:
+                    conn.send('HTTP/1.1 503 Server Error')
+                    conn.close()
+            sock.close()
+
+        sock = eventlet.listen(('', 0))
+        port = sock.getsockname()[1]
+        proxy = 'http://127.0.0.1:%s' % port
+        url = 'https://127.0.0.1:1/a'
+        server = eventlet.spawn(handle, sock)
+        try:
+            headers = {'Content-Length': '0'}
+            with mock.patch('swift.common.internal_client.sleep'):
+                try:
+                    internal_client.put_object(
+                        url, container='c', name='o1', headers=headers,
+                        contents='', proxy=proxy, timeout=0.1, retries=0)
+                except urllib2.HTTPError as e:
+                    self.assertEqual(e.code, 503)
+                except urllib2.URLError as e:
+                    if 'ECONNREFUSED' in str(e):
+                        self.fail(
+                            "Got %s which probably means the http proxy "
+                            "settings were not used" % e)
+                    else:
+                        raise e
+                else:
+                    self.fail('Unexpected successful response')
+        finally:
+            running = False
+        server.wait()
+
 
 if __name__ == '__main__':
     unittest.main()

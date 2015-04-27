@@ -22,7 +22,7 @@ from contextlib import contextmanager
 
 from eventlet import Timeout
 
-from swift.common.utils import normalize_timestamp
+from swift.common.utils import Timestamp
 from swift.common.exceptions import DiskFileQuarantined, DiskFileNotExist, \
     DiskFileCollision, DiskFileDeleted, DiskFileNotOpen
 from swift.common.swob import multi_range_iterator
@@ -56,6 +56,12 @@ class InMemoryFileSystem(object):
 
     def get_diskfile(self, account, container, obj, **kwargs):
         return DiskFile(self, account, container, obj)
+
+    def pickle_async_update(self, *args, **kwargs):
+        """
+        For now don't handle async updates.
+        """
+        pass
 
 
 class DiskFileWriter(object):
@@ -97,6 +103,16 @@ class DiskFileWriter(object):
         """
         metadata['name'] = self._name
         self._filesystem.put_object(self._name, self._fp, metadata)
+
+    def commit(self, timestamp):
+        """
+        Perform any operations necessary to mark the object as durable. For
+        mem_diskfile type this is a no-op.
+
+        :param timestamp: object put timestamp, an instance of
+                          :class:`~swift.common.utils.Timestamp`
+        """
+        pass
 
 
 class DiskFileReader(object):
@@ -394,7 +410,6 @@ class DiskFile(object):
 
         :param timestamp: timestamp to compare with each file
         """
-        timestamp = normalize_timestamp(timestamp)
         fp, md = self._filesystem.get_object(self._name)
-        if md['X-Timestamp'] < timestamp:
+        if md and md['X-Timestamp'] < Timestamp(timestamp):
             self._filesystem.del_object(self._name)

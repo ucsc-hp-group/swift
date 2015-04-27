@@ -26,7 +26,10 @@ import simplejson as json
 
 from nose import SkipTest
 from xml.dom import minidom
+
 from swiftclient import get_auth
+
+from swift.common.utils import config_true_value
 
 from test import safe_repr
 
@@ -40,7 +43,7 @@ class RequestError(Exception):
 
 
 class ResponseError(Exception):
-    def __init__(self, response, method, path):
+    def __init__(self, response, method=None, path=None):
         self.status = response.status
         self.reason = response.reason
         self.method = method
@@ -103,11 +106,13 @@ class Connection(object):
     def __init__(self, config):
         for key in 'auth_host auth_port auth_ssl username password'.split():
             if key not in config:
-                raise SkipTest
+                raise SkipTest(
+                    "Missing required configuration parameter: %s" % key)
 
         self.auth_host = config['auth_host']
         self.auth_port = int(config['auth_port'])
         self.auth_ssl = config['auth_ssl'] in ('on', 'true', 'yes', '1')
+        self.insecure = config_true_value(config.get('insecure', 'false'))
         self.auth_prefix = config.get('auth_prefix', '/')
         self.auth_version = str(config.get('auth_version', '1'))
 
@@ -117,6 +122,7 @@ class Connection(object):
 
         self.storage_host = None
         self.storage_port = None
+        self.storage_url = None
 
         self.conn_class = None
 
@@ -145,10 +151,11 @@ class Connection(object):
         auth_netloc = "%s:%d" % (self.auth_host, self.auth_port)
         auth_url = auth_scheme + auth_netloc + auth_path
 
+        authargs = dict(snet=False, tenant_name=self.account,
+                        auth_version=self.auth_version, os_options={},
+                        insecure=self.insecure)
         (storage_url, storage_token) = get_auth(
-            auth_url, auth_user, self.password, snet=False,
-            tenant_name=self.account, auth_version=self.auth_version,
-            os_options={})
+            auth_url, auth_user, self.password, **authargs)
 
         if not (storage_url and storage_token):
             raise AuthenticationFailed()
@@ -172,18 +179,37 @@ class Connection(object):
         # unicode and this would cause troubles when doing
         # no_safe_quote query.
         self.storage_url = str('/%s/%s' % (x[3], x[4]))
-
+        self.account_name = str(x[4])
+        self.auth_user = auth_user
         self.storage_token = storage_token
+        self.user_acl = '%s:%s' % (self.account, self.username)
 
         self.http_connect()
         return self.storage_url, self.storage_token
+
+    def cluster_info(self):
+        """
+        Retrieve the data in /info, or {} on 404
+        """
+        status = self.make_request('GET', '/info',
+                                   cfg={'absolute_path': True})
+        if status // 100 == 4:
+            return {}
+        if not 200 <= status <= 299:
+            raise ResponseError(self.response, 'GET', '/info')
+        return json.loads(self.response.read())
 
     def http_connect(self):
         self.connection = self.conn_class(self.storage_host,
                                           port=self.storage_port)
         #self.connection.set_debuglevel(3)
 
-    def make_path(self, path=[], cfg={}):
+    def make_path(self, path=None, cfg=None):
+        if path is None:
+            path = []
+        if cfg is None:
+            cfg = {}
+
         if cfg.get('version_only_path'):
             return '/' + self.storage_url.split('/')[1]
 
@@ -196,7 +222,9 @@ class Connection(object):
         else:
             return self.storage_url
 
-    def make_headers(self, hdrs, cfg={}):
+    def make_headers(self, hdrs, cfg=None):
+        if cfg is None:
+            cfg = {}
         headers = {}
 
         if not cfg.get('no_auth_token'):
@@ -206,10 +234,18 @@ class Connection(object):
             headers.update(hdrs)
         return headers
 
-    def make_request(self, method, path=[], data='', hdrs={}, parms={},
-                     cfg={}):
-        if not cfg.get('verbatim_path'):
-            # Set verbatim_path=True to make a request to exactly the given
+    def make_request(self, method, path=None, data='', hdrs=None, parms=None,
+                     cfg=None):
+        if path is None:
+            path = []
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
+        if not cfg.get('absolute_path'):
+            # Set absolute_path=True to make a request to exactly the given
             # path, not storage path + given path. Useful for
             # non-account/container/object requests.
             path = self.make_path(path, cfg=cfg)
@@ -265,7 +301,14 @@ class Connection(object):
                            'Attempts: %s, Failures: %s' %
                            (request, len(fail_messages), fail_messages))
 
-    def put_start(self, path, hdrs={}, parms={}, cfg={}, chunked=False):
+    def put_start(self, path, hdrs=None, parms=None, cfg=None, chunked=False):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
+
         self.http_connect()
 
         path = self.make_path(path, cfg)
@@ -306,14 +349,18 @@ class Connection(object):
         return self.response.status
 
 
-class Base:
+class Base(object):
     def __str__(self):
         return self.name
 
-    def header_fields(self, fields):
+    def header_fields(self, required_fields, optional_fields=None):
+        if optional_fields is None:
+            optional_fields = ()
+
         headers = dict(self.conn.response.getheaders())
         ret = {}
-        for field in fields:
+
+        for field in required_fields:
             if field[1] not in headers:
                 raise ValueError("%s was not found in response header" %
                                  (field[1]))
@@ -322,6 +369,15 @@ class Base:
                 ret[field[0]] = int(headers[field[1]])
             except ValueError:
                 ret[field[0]] = headers[field[1]]
+
+        for field in optional_fields:
+            if field[1] not in headers:
+                continue
+            try:
+                ret[field[0]] = int(headers[field[1]])
+            except ValueError:
+                ret[field[0]] = headers[field[1]]
+
         return ret
 
 
@@ -330,10 +386,31 @@ class Account(Base):
         self.conn = conn
         self.name = str(name)
 
+    def update_metadata(self, metadata=None, cfg=None):
+        if metadata is None:
+            metadata = {}
+        if cfg is None:
+            cfg = {}
+        headers = dict(("X-Account-Meta-%s" % k, v)
+                       for k, v in metadata.items())
+
+        self.conn.make_request('POST', self.path, hdrs=headers, cfg=cfg)
+        if not 200 <= self.conn.response.status <= 299:
+            raise ResponseError(self.conn.response, 'POST',
+                                self.conn.make_path(self.path))
+        return True
+
     def container(self, container_name):
         return Container(self.conn, self.name, container_name)
 
-    def containers(self, hdrs={}, parms={}, cfg={}):
+    def containers(self, hdrs=None, parms=None, cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
+
         format_type = parms.get('format', None)
         if format_type not in [None, 'json', 'xml']:
             raise RequestError('Invalid format: %s' % format_type)
@@ -379,7 +456,13 @@ class Account(Base):
 
         return listing_empty(self.containers)
 
-    def info(self, hdrs={}, parms={}, cfg={}):
+    def info(self, hdrs=None, parms=None, cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
         if self.conn.make_request('HEAD', self.path, hdrs=hdrs,
                                   parms=parms, cfg=cfg) != 204:
 
@@ -403,11 +486,21 @@ class Container(Base):
         self.account = str(account)
         self.name = str(name)
 
-    def create(self, hdrs={}, parms={}, cfg={}):
+    def create(self, hdrs=None, parms=None, cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
         return self.conn.make_request('PUT', self.path, hdrs=hdrs,
                                       parms=parms, cfg=cfg) in (201, 202)
 
-    def delete(self, hdrs={}, parms={}):
+    def delete(self, hdrs=None, parms=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
         return self.conn.make_request('DELETE', self.path, hdrs=hdrs,
                                       parms=parms) == 204
 
@@ -425,7 +518,13 @@ class Container(Base):
     def file(self, file_name):
         return File(self.conn, self.account, self.name, file_name)
 
-    def files(self, hdrs={}, parms={}, cfg={}):
+    def files(self, hdrs=None, parms=None, cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
         format_type = parms.get('format', None)
         if format_type not in [None, 'json', 'xml']:
             raise RequestError('Invalid format: %s' % format_type)
@@ -475,15 +574,25 @@ class Container(Base):
         raise ResponseError(self.conn.response, 'GET',
                             self.conn.make_path(self.path))
 
-    def info(self, hdrs={}, parms={}, cfg={}):
+    def info(self, hdrs=None, parms=None, cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
         self.conn.make_request('HEAD', self.path, hdrs=hdrs,
                                parms=parms, cfg=cfg)
 
         if self.conn.response.status == 204:
-            fields = [['bytes_used', 'x-container-bytes-used'],
-                      ['object_count', 'x-container-object-count']]
+            required_fields = [['bytes_used', 'x-container-bytes-used'],
+                               ['object_count', 'x-container-object-count']]
+            optional_fields = [
+                ['versions', 'x-versions-location'],
+                ['tempurl_key', 'x-container-meta-temp-url-key'],
+                ['tempurl_key2', 'x-container-meta-temp-url-key-2']]
 
-            return self.header_fields(fields)
+            return self.header_fields(required_fields, optional_fields)
 
         raise ResponseError(self.conn.response, 'HEAD',
                             self.conn.make_path(self.path))
@@ -505,7 +614,9 @@ class File(Base):
         self.size = None
         self.metadata = {}
 
-    def make_headers(self, cfg={}):
+    def make_headers(self, cfg=None):
+        if cfg is None:
+            cfg = {}
         headers = {}
         if not cfg.get('no_content_length'):
             if cfg.get('set_content_length'):
@@ -542,7 +653,13 @@ class File(Base):
         data.seek(0)
         return checksum.hexdigest()
 
-    def copy(self, dest_cont, dest_file, hdrs={}, parms={}, cfg={}):
+    def copy(self, dest_cont, dest_file, hdrs=None, parms=None, cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
         if 'destination' in cfg:
             headers = {'Destination': cfg['destination']}
         elif cfg.get('no_destination'):
@@ -557,7 +674,37 @@ class File(Base):
         return self.conn.make_request('COPY', self.path, hdrs=headers,
                                       parms=parms) == 201
 
-    def delete(self, hdrs={}, parms={}):
+    def copy_account(self, dest_account, dest_cont, dest_file,
+                     hdrs=None, parms=None, cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
+        if 'destination' in cfg:
+            headers = {'Destination': cfg['destination']}
+        elif cfg.get('no_destination'):
+            headers = {}
+        else:
+            headers = {'Destination-Account': dest_account,
+                       'Destination': '%s/%s' % (dest_cont, dest_file)}
+        headers.update(hdrs)
+
+        if 'Destination-Account' in headers:
+            headers['Destination-Account'] = \
+                urllib.quote(headers['Destination-Account'])
+        if 'Destination' in headers:
+            headers['Destination'] = urllib.quote(headers['Destination'])
+
+        return self.conn.make_request('COPY', self.path, hdrs=headers,
+                                      parms=parms) == 201
+
+    def delete(self, hdrs=None, parms=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
         if self.conn.make_request('DELETE', self.path, hdrs=hdrs,
                                   parms=parms) != 204:
 
@@ -566,7 +713,13 @@ class File(Base):
 
         return True
 
-    def info(self, hdrs={}, parms={}, cfg={}):
+    def info(self, hdrs=None, parms=None, cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
         if self.conn.make_request('HEAD', self.path, hdrs=hdrs,
                                   parms=parms, cfg=cfg) != 200:
 
@@ -577,12 +730,18 @@ class File(Base):
                   ['content_type', 'content-type'],
                   ['last_modified', 'last-modified'],
                   ['etag', 'etag']]
+        optional_fields = [['x_object_manifest', 'x-object-manifest']]
 
-        header_fields = self.header_fields(fields)
+        header_fields = self.header_fields(fields,
+                                           optional_fields=optional_fields)
         header_fields['etag'] = header_fields['etag'].strip('"')
         return header_fields
 
-    def initialize(self, hdrs={}, parms={}):
+    def initialize(self, hdrs=None, parms=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
         if not self.name:
             return False
 
@@ -627,7 +786,11 @@ class File(Base):
         return data
 
     def read(self, size=-1, offset=0, hdrs=None, buffer=None,
-             callback=None, cfg={}, parms={}):
+             callback=None, cfg=None, parms=None):
+        if cfg is None:
+            cfg = {}
+        if parms is None:
+            parms = {}
 
         if size > 0:
             range_string = 'bytes=%d-%d' % (offset, (offset + size) - 1)
@@ -684,7 +847,12 @@ class File(Base):
         finally:
             fobj.close()
 
-    def sync_metadata(self, metadata={}, cfg={}):
+    def sync_metadata(self, metadata=None, cfg=None):
+        if metadata is None:
+            metadata = {}
+        if cfg is None:
+            cfg = {}
+
         self.metadata.update(metadata)
 
         if self.metadata:
@@ -704,7 +872,14 @@ class File(Base):
 
         return True
 
-    def chunked_write(self, data=None, hdrs={}, parms={}, cfg={}):
+    def chunked_write(self, data=None, hdrs=None, parms=None, cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
+
         if data is not None and self.chunked_write_in_progress:
             self.conn.put_data(data, True)
         elif data is not None:
@@ -723,8 +898,15 @@ class File(Base):
         else:
             raise RuntimeError
 
-    def write(self, data='', hdrs={}, parms={}, callback=None, cfg={},
+    def write(self, data='', hdrs=None, parms=None, callback=None, cfg=None,
               return_resp=False):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
+
         block_size = 2 ** 20
 
         if isinstance(data, file):
@@ -745,13 +927,15 @@ class File(Base):
 
         transferred = 0
         buff = data.read(block_size)
+        buff_len = len(buff)
         try:
-            while len(buff) > 0:
+            while buff_len > 0:
                 self.conn.put_data(buff)
-                buff = data.read(block_size)
-                transferred += len(buff)
+                transferred += buff_len
                 if callable(callback):
                     callback(transferred, self.size)
+                buff = data.read(block_size)
+                buff_len = len(buff)
 
             self.conn.put_end()
         except socket.timeout as err:
@@ -773,7 +957,14 @@ class File(Base):
 
         return True
 
-    def write_random(self, size=None, hdrs={}, parms={}, cfg={}):
+    def write_random(self, size=None, hdrs=None, parms=None, cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
+
         data = self.random_data(size)
         if not self.write(data, hdrs=hdrs, parms=parms, cfg=cfg):
             raise ResponseError(self.conn.response, 'PUT',
@@ -781,7 +972,15 @@ class File(Base):
         self.md5 = self.compute_md5sum(StringIO.StringIO(data))
         return data
 
-    def write_random_return_resp(self, size=None, hdrs={}, parms={}, cfg={}):
+    def write_random_return_resp(self, size=None, hdrs=None, parms=None,
+                                 cfg=None):
+        if hdrs is None:
+            hdrs = {}
+        if parms is None:
+            parms = {}
+        if cfg is None:
+            cfg = {}
+
         data = self.random_data(size)
         resp = self.write(data, hdrs=hdrs, parms=parms, cfg=cfg,
                           return_resp=True)

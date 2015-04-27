@@ -18,12 +18,27 @@ import cPickle as pickle
 import os
 import sys
 import unittest
+import stat
 from contextlib import closing
 from gzip import GzipFile
+from tempfile import mkdtemp
 from shutil import rmtree
 from time import sleep, time
 
 from swift.common import ring, utils
+
+
+class TestRingBase(unittest.TestCase):
+
+    def setUp(self):
+        self._orig_hash_suffix = utils.HASH_PATH_SUFFIX
+        self._orig_hash_prefix = utils.HASH_PATH_PREFIX
+        utils.HASH_PATH_SUFFIX = 'endcap'
+        utils.HASH_PATH_PREFIX = ''
+
+    def tearDown(self):
+        utils.HASH_PATH_SUFFIX = self._orig_hash_suffix
+        utils.HASH_PATH_PREFIX = self._orig_hash_prefix
 
 
 class TestRingData(unittest.TestCase):
@@ -97,15 +112,21 @@ class TestRingData(unittest.TestCase):
             with open(ring_fname2) as ring2:
                 self.assertEqual(ring1.read(), ring2.read())
 
+    def test_permissions(self):
+        ring_fname = os.path.join(self.testdir, 'stat.ring.gz')
+        rd = ring.RingData(
+            [array.array('H', [0, 1, 0, 1]), array.array('H', [0, 1, 0, 1])],
+            [{'id': 0, 'zone': 0}, {'id': 1, 'zone': 1}], 30)
+        rd.save(ring_fname)
+        self.assertEqual(oct(stat.S_IMODE(os.stat(ring_fname).st_mode)),
+                         '0644')
 
-class TestRing(unittest.TestCase):
+
+class TestRing(TestRingBase):
 
     def setUp(self):
-        utils.HASH_PATH_SUFFIX = 'endcap'
-        utils.HASH_PATH_PREFIX = ''
-        self.testdir = os.path.join(os.path.dirname(__file__), 'ring')
-        rmtree(self.testdir, ignore_errors=1)
-        os.mkdir(self.testdir)
+        super(TestRing, self).setUp()
+        self.testdir = mkdtemp()
         self.testgz = os.path.join(self.testdir, 'whatever.ring.gz')
         self.intended_replica2part2dev_id = [
             array.array('H', [0, 1, 0, 1]),
@@ -138,6 +159,7 @@ class TestRing(unittest.TestCase):
             reload_time=self.intended_reload_time, ring_name='whatever')
 
     def tearDown(self):
+        super(TestRing, self).tearDown()
         rmtree(self.testdir, ignore_errors=1)
 
     def test_creation(self):
@@ -150,13 +172,16 @@ class TestRing(unittest.TestCase):
         # test invalid endcap
         _orig_hash_path_suffix = utils.HASH_PATH_SUFFIX
         _orig_hash_path_prefix = utils.HASH_PATH_PREFIX
+        _orig_swift_conf_file = utils.SWIFT_CONF_FILE
         try:
             utils.HASH_PATH_SUFFIX = ''
             utils.HASH_PATH_PREFIX = ''
+            utils.SWIFT_CONF_FILE = ''
             self.assertRaises(SystemExit, ring.Ring, self.testdir, 'whatever')
         finally:
             utils.HASH_PATH_SUFFIX = _orig_hash_path_suffix
             utils.HASH_PATH_PREFIX = _orig_hash_path_prefix
+            utils.SWIFT_CONF_FILE = _orig_swift_conf_file
 
     def test_has_changed(self):
         self.assertEquals(self.ring.has_changed(), False)
@@ -338,63 +363,74 @@ class TestRing(unittest.TestCase):
         self.assertRaises(TypeError, self.ring.get_nodes)
         part, nodes = self.ring.get_nodes('a')
         self.assertEquals(part, 0)
-        self.assertEquals(nodes, [self.intended_devs[0],
-                                  self.intended_devs[3]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[0],
+                          self.intended_devs[3]])])
 
         part, nodes = self.ring.get_nodes('a1')
         self.assertEquals(part, 0)
-        self.assertEquals(nodes, [self.intended_devs[0],
-                                  self.intended_devs[3]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[0],
+                          self.intended_devs[3]])])
 
         part, nodes = self.ring.get_nodes('a4')
         self.assertEquals(part, 1)
-        self.assertEquals(nodes, [self.intended_devs[1],
-                                  self.intended_devs[4]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[1],
+                          self.intended_devs[4]])])
 
         part, nodes = self.ring.get_nodes('aa')
         self.assertEquals(part, 1)
-        self.assertEquals(nodes, [self.intended_devs[1],
-                                  self.intended_devs[4]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[1],
+                          self.intended_devs[4]])])
 
         part, nodes = self.ring.get_nodes('a', 'c1')
         self.assertEquals(part, 0)
-        self.assertEquals(nodes, [self.intended_devs[0],
-                                  self.intended_devs[3]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[0],
+                          self.intended_devs[3]])])
 
         part, nodes = self.ring.get_nodes('a', 'c0')
         self.assertEquals(part, 3)
-        self.assertEquals(nodes, [self.intended_devs[1],
-                                  self.intended_devs[4]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[1],
+                          self.intended_devs[4]])])
 
         part, nodes = self.ring.get_nodes('a', 'c3')
         self.assertEquals(part, 2)
-        self.assertEquals(nodes, [self.intended_devs[0],
-                                  self.intended_devs[3]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[0],
+                          self.intended_devs[3]])])
 
         part, nodes = self.ring.get_nodes('a', 'c2')
-        self.assertEquals(part, 2)
-        self.assertEquals(nodes, [self.intended_devs[0],
-                                  self.intended_devs[3]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[0],
+                          self.intended_devs[3]])])
 
         part, nodes = self.ring.get_nodes('a', 'c', 'o1')
         self.assertEquals(part, 1)
-        self.assertEquals(nodes, [self.intended_devs[1],
-                                  self.intended_devs[4]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[1],
+                          self.intended_devs[4]])])
 
         part, nodes = self.ring.get_nodes('a', 'c', 'o5')
         self.assertEquals(part, 0)
-        self.assertEquals(nodes, [self.intended_devs[0],
-                                  self.intended_devs[3]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[0],
+                          self.intended_devs[3]])])
 
         part, nodes = self.ring.get_nodes('a', 'c', 'o0')
         self.assertEquals(part, 0)
-        self.assertEquals(nodes, [self.intended_devs[0],
-                                  self.intended_devs[3]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[0],
+                          self.intended_devs[3]])])
 
         part, nodes = self.ring.get_nodes('a', 'c', 'o2')
         self.assertEquals(part, 2)
-        self.assertEquals(nodes, [self.intended_devs[0],
-                                  self.intended_devs[3]])
+        self.assertEquals(nodes, [dict(node, index=i) for i, node in
+                          enumerate([self.intended_devs[0],
+                          self.intended_devs[3]])])
 
     def add_dev_to_ring(self, new_dev):
         self.ring.devs.append(new_dev)
@@ -678,7 +714,10 @@ class TestRing(unittest.TestCase):
         for region in xrange(1, 5):
             rb.add_dev({'id': next_dev_id,
                         'ip': '1.%d.1.%d' % (region, server), 'port': 1234,
-                        'zone': 1, 'region': region, 'weight': 1.0})
+                        # 108.0 is the weight of all devices created prior to
+                        # this test in region 0; this way all regions have
+                        # equal combined weight
+                        'zone': 1, 'region': region, 'weight': 108.0})
             next_dev_id += 1
         rb.pretend_min_part_hours_passed()
         rb.rebalance(seed=1)

@@ -20,22 +20,27 @@ from swift import gettext_ as _
 from random import shuffle
 from time import time
 import itertools
+import functools
+import sys
 
 from eventlet import Timeout
 
 from swift import __canonical_version__ as swift_version
 from swift.common import constraints
+from swift.common.storage_policy import POLICIES
 from swift.common.ring import Ring
 from swift.common.utils import cache_from_env, get_logger, \
     get_remote_client, split_path, config_true_value, generate_trans_id, \
     affinity_key_function, affinity_locality_predicate, list_from_csv, \
     register_swift_info
-from swift.common.constraints import check_utf8
-from swift.proxy.controllers import AccountController, ObjectController, \
-    ContainerController, InfoController
+from swift.common.constraints import check_utf8, valid_api_version
+from swift.proxy.controllers import AccountController, ContainerController, \
+    ObjectControllerRouter, InfoController
+from swift.proxy.controllers.base import get_container_info
 from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
     HTTPMethodNotAllowed, HTTPNotFound, HTTPPreconditionFailed, \
-    HTTPServerError, HTTPException, Request
+    HTTPServerError, HTTPException, Request, HTTPServiceUnavailable
+from swift.common.exceptions import APIVersionError
 
 
 # List of entry points for mandatory middlewares.
@@ -44,31 +49,30 @@ from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
 #
 # "name" (required) is the entry point name from setup.py.
 #
-# "after" (optional) is a list of middlewares that this middleware should come
-# after. Default is for the middleware to go at the start of the pipeline. Any
-# middlewares in the "after" list that are not present in the pipeline will be
-# ignored, so you can safely name optional middlewares to come after. For
-# example, 'after: ["catch_errors", "bulk"]' would install this middleware
-# after catch_errors and bulk if both were present, but if bulk were absent,
-# would just install it after catch_errors.
-#
 # "after_fn" (optional) a function that takes a PipelineWrapper object as its
-# single argument and returns a list of middlewares that this middleware should
-# come after. This list overrides any defined by the "after" field.
+# single argument and returns a list of middlewares that this middleware
+# should come after. Any middlewares in the returned list that are not present
+# in the pipeline will be ignored, so you can safely name optional middlewares
+# to come after. For example, ["catch_errors", "bulk"] would install this
+# middleware after catch_errors and bulk if both were present, but if bulk
+# were absent, would just install it after catch_errors.
+
 required_filters = [
     {'name': 'catch_errors'},
     {'name': 'gatekeeper',
      'after_fn': lambda pipe: (['catch_errors']
-                               if pipe.startswith("catch_errors")
-                               else [])}
-]
+                               if pipe.startswith('catch_errors')
+                               else [])},
+    {'name': 'dlo', 'after_fn': lambda _junk: [
+        'staticweb', 'tempauth', 'keystoneauth',
+        'catch_errors', 'gatekeeper', 'proxy_logging']}]
 
 
 class Application(object):
     """WSGI application for the proxy server."""
 
     def __init__(self, conf, memcache=None, logger=None, account_ring=None,
-                 container_ring=None, object_ring=None):
+                 container_ring=None):
         if conf is None:
             conf = {}
         if logger is None:
@@ -76,8 +80,13 @@ class Application(object):
         else:
             self.logger = logger
 
+        self._error_limiting = {}
+
         swift_dir = conf.get('swift_dir', '/etc/swift')
+        self.swift_dir = swift_dir
         self.node_timeout = int(conf.get('node_timeout', 10))
+        self.recoverable_node_timeout = int(
+            conf.get('recoverable_node_timeout', self.node_timeout))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
         self.client_timeout = int(conf.get('client_timeout', 60))
         self.put_queue_depth = int(conf.get('put_queue_depth', 10))
@@ -97,19 +106,23 @@ class Application(object):
             config_true_value(conf.get('allow_account_management', 'no'))
         self.object_post_as_copy = \
             config_true_value(conf.get('object_post_as_copy', 'true'))
-        self.object_ring = object_ring or Ring(swift_dir, ring_name='object')
         self.container_ring = container_ring or Ring(swift_dir,
                                                      ring_name='container')
         self.account_ring = account_ring or Ring(swift_dir,
                                                  ring_name='account')
+        # ensure rings are loaded for all configured storage policies
+        for policy in POLICIES:
+            policy.load_ring(swift_dir)
+        self.obj_controller_router = ObjectControllerRouter()
         self.memcache = memcache
         mimetypes.init(mimetypes.knownfiles +
                        [os.path.join(swift_dir, 'mime.types')])
         self.account_autocreate = \
             config_true_value(conf.get('account_autocreate', 'no'))
-        self.expiring_objects_account = \
-            (conf.get('auto_create_account_prefix') or '.') + \
-            'expiring_objects'
+        self.auto_create_account_prefix = (
+            conf.get('auto_create_account_prefix') or '.')
+        self.expiring_objects_account = self.auto_create_account_prefix + \
+            (conf.get('expiring_objects_account_name') or 'expiring_objects')
         self.expiring_objects_container_divisor = \
             int(conf.get('expiring_objects_container_divisor') or 86400)
         self.max_containers_per_account = \
@@ -121,34 +134,30 @@ class Application(object):
         self.deny_host_headers = [
             host.strip() for host in
             conf.get('deny_host_headers', '').split(',') if host.strip()]
-        self.rate_limit_after_segment = \
-            int(conf.get('rate_limit_after_segment', 10))
-        self.rate_limit_segments_per_sec = \
-            int(conf.get('rate_limit_segments_per_sec', 1))
         self.log_handoffs = config_true_value(conf.get('log_handoffs', 'true'))
         self.cors_allow_origin = [
             a.strip()
             for a in conf.get('cors_allow_origin', '').split(',')
             if a.strip()]
+        self.strict_cors_mode = config_true_value(
+            conf.get('strict_cors_mode', 't'))
         self.node_timings = {}
         self.timing_expiry = int(conf.get('timing_expiry', 300))
         self.sorting_method = conf.get('sorting_method', 'shuffle').lower()
-        self.allow_static_large_object = config_true_value(
-            conf.get('allow_static_large_object', 'true'))
         self.max_large_object_get_time = float(
             conf.get('max_large_object_get_time', '86400'))
         value = conf.get('request_node_count', '2 * replicas').lower().split()
         if len(value) == 1:
-            value = int(value[0])
-            self.request_node_count = lambda r: value
+            rnc_value = int(value[0])
+            self.request_node_count = lambda replicas: rnc_value
         elif len(value) == 3 and value[1] == '*' and value[2] == 'replicas':
-            value = int(value[0])
-            self.request_node_count = lambda r: value * r.replica_count
+            rnc_value = int(value[0])
+            self.request_node_count = lambda replicas: rnc_value * replicas
         else:
             raise ValueError(
                 'Invalid request_node_count value: %r' % ''.join(value))
         try:
-            read_affinity = conf.get('read_affinity', '')
+            self._read_affinity = read_affinity = conf.get('read_affinity', '')
             self.read_affinity_sort_key = affinity_key_function(read_affinity)
         except ValueError as err:
             # make the message a little more useful
@@ -165,21 +174,27 @@ class Application(object):
         value = conf.get('write_affinity_node_count',
                          '2 * replicas').lower().split()
         if len(value) == 1:
-            value = int(value[0])
-            self.write_affinity_node_count = lambda r: value
+            wanc_value = int(value[0])
+            self.write_affinity_node_count = lambda replicas: wanc_value
         elif len(value) == 3 and value[1] == '*' and value[2] == 'replicas':
-            value = int(value[0])
-            self.write_affinity_node_count = lambda r: value * r.replica_count
+            wanc_value = int(value[0])
+            self.write_affinity_node_count = \
+                lambda replicas: wanc_value * replicas
         else:
             raise ValueError(
                 'Invalid write_affinity_node_count value: %r' % ''.join(value))
+        # swift_owner_headers are stripped by the account and container
+        # controllers; we should extend header stripping to object controller
+        # when a privileged object header is implemented.
         swift_owner_headers = conf.get(
             'swift_owner_headers',
             'x-container-read, x-container-write, '
             'x-container-sync-key, x-container-sync-to, '
-            'x-account-meta-temp-url-key, x-account-meta-temp-url-key-2')
+            'x-account-meta-temp-url-key, x-account-meta-temp-url-key-2, '
+            'x-container-meta-temp-url-key, x-container-meta-temp-url-key-2, '
+            'x-account-access-control')
         self.swift_owner_headers = [
-            name.strip()
+            name.strip().title()
             for name in swift_owner_headers.split(',') if name.strip()]
         # Initialization was successful, so now apply the client chunk size
         # parameter as the default read / write buffer size for the network
@@ -196,43 +211,75 @@ class Application(object):
         self.expose_info = config_true_value(
             conf.get('expose_info', 'yes'))
         self.disallowed_sections = list_from_csv(
-            conf.get('disallowed_sections'))
+            conf.get('disallowed_sections', 'swift.valid_api_versions'))
         self.admin_key = conf.get('admin_key', None)
         register_swift_info(
             version=swift_version,
-            max_file_size=constraints.MAX_FILE_SIZE,
-            max_meta_name_length=constraints.MAX_META_NAME_LENGTH,
-            max_meta_value_length=constraints.MAX_META_VALUE_LENGTH,
-            max_meta_count=constraints.MAX_META_COUNT,
-            account_listing_limit=constraints.ACCOUNT_LISTING_LIMIT,
-            container_listing_limit=constraints.CONTAINER_LISTING_LIMIT,
-            max_account_name_length=constraints.MAX_ACCOUNT_NAME_LENGTH,
-            max_container_name_length=constraints.MAX_CONTAINER_NAME_LENGTH,
-            max_object_name_length=constraints.MAX_OBJECT_NAME_LENGTH)
+            strict_cors_mode=self.strict_cors_mode,
+            policies=POLICIES.get_policy_info(),
+            allow_account_management=self.allow_account_management,
+            account_autocreate=self.account_autocreate,
+            **constraints.EFFECTIVE_CONSTRAINTS)
 
-    def get_controller(self, path):
+    def check_config(self):
+        """
+        Check the configuration for possible errors
+        """
+        if self._read_affinity and self.sorting_method != 'affinity':
+            self.logger.warn("sorting_method is set to '%s', not 'affinity'; "
+                             "read_affinity setting will have no effect." %
+                             self.sorting_method)
+
+    def get_object_ring(self, policy_idx):
+        """
+        Get the ring object to use to handle a request based on its policy.
+
+        :param policy_idx: policy index as defined in swift.conf
+
+        :returns: appropriate ring object
+        """
+        return POLICIES.get_object_ring(policy_idx, self.swift_dir)
+
+    def get_controller(self, req):
         """
         Get the controller to handle a request.
 
-        :param path: path from request
+        :param req: the request
         :returns: tuple of (controller class, path dictionary)
 
         :raises: ValueError (thrown by split_path) if given invalid path
         """
-        if path == '/info':
+        if req.path == '/info':
             d = dict(version=None,
                      expose_info=self.expose_info,
                      disallowed_sections=self.disallowed_sections,
                      admin_key=self.admin_key)
             return InfoController, d
 
-        version, account, container, obj = split_path(path, 1, 4, True)
+        version, account, container, obj = split_path(req.path, 1, 4, True)
         d = dict(version=version,
                  account_name=account,
                  container_name=container,
                  object_name=obj)
+        if account and not valid_api_version(version):
+            raise APIVersionError('Invalid path')
         if obj and container and account:
-            return ObjectController, d
+            info = get_container_info(req.environ, self)
+            policy_index = req.headers.get('X-Backend-Storage-Policy-Index',
+                                           info['storage_policy'])
+            policy = POLICIES.get_by_index(policy_index)
+            if not policy:
+                # This indicates that a new policy has been created,
+                # with rings, deployed, released (i.e. deprecated =
+                # False), used by a client to create a container via
+                # another proxy that was restarted after the policy
+                # was released, and is now cached - all before this
+                # worker was HUPed to stop accepting new
+                # connections.  There should never be an "unknown"
+                # index - but when there is - it's probably operator
+                # error and hopefully temporary.
+                raise HTTPServiceUnavailable('Unknown Storage Policy')
+            return self.obj_controller_router[policy], d
         elif container and account:
             return ContainerController, d
         elif account and not container and not obj:
@@ -249,12 +296,7 @@ class Application(object):
         """
         try:
             if self.memcache is None:
-                self.memcache = cache_from_env(env)
-            # Remove any x-backend-* headers since those are reserved for use
-            # by backends communicating with each other; no end user should be
-            # able to send those into the cluster.
-            for key in list(k for k in env if k.startswith('HTTP_X_BACKEND_')):
-                del env[key]
+                self.memcache = cache_from_env(env, True)
             req = self.update_request(Request(env))
             return self.handle_request(req)(env, start_response)
         except UnicodeError:
@@ -297,10 +339,13 @@ class Application(object):
                     request=req, body='Invalid UTF8 or contains NULL')
 
             try:
-                controller, path_parts = self.get_controller(req.path)
+                controller, path_parts = self.get_controller(req)
                 p = req.path_info
                 if isinstance(p, unicode):
                     p = p.encode('utf-8')
+            except APIVersionError:
+                self.logger.increment('errors')
+                return HTTPBadRequest(request=req)
             except ValueError:
                 self.logger.increment('errors')
                 return HTTPNotFound(request=req)
@@ -316,7 +361,11 @@ class Application(object):
             controller = controller(self, **path_parts)
             if 'swift.trans_id' not in req.environ:
                 # if this wasn't set by an earlier middleware, set it now
-                trans_id = generate_trans_id(self.trans_id_suffix)
+                trans_id_suffix = self.trans_id_suffix
+                trans_id_extra = req.headers.get('x-trans-id-extra')
+                if trans_id_extra:
+                    trans_id_suffix += '-' + trans_id_extra[:32]
+                trans_id = generate_trans_id(trans_id_suffix)
                 req.environ['swift.trans_id'] = trans_id
                 self.logger.txn_id = trans_id
             req.headers['x-trans-id'] = req.environ['swift.trans_id']
@@ -336,7 +385,8 @@ class Application(object):
                 # controller's method indicates it'd like to gather more
                 # information and try again later.
                 resp = req.environ['swift.authorize'](req)
-                if not resp:
+                if not resp and not req.headers.get('X-Copy-From-Account') \
+                        and not req.headers.get('Destination-Account'):
                     # No resp means authorized, no delayed recheck required.
                     del req.environ['swift.authorize']
                 else:
@@ -384,6 +434,9 @@ class Application(object):
         timing = round(timing, 3)  # sort timings to the millisecond
         self.node_timings[node['ip']] = (timing, now + self.timing_expiry)
 
+    def _error_limit_node_key(self, node):
+        return "{ip}:{port}/{device}".format(**node)
+
     def error_limited(self, node):
         """
         Check if the node is currently error limited.
@@ -392,15 +445,16 @@ class Application(object):
         :returns: True if error limited, False otherwise
         """
         now = time()
-        if 'errors' not in node:
+        node_key = self._error_limit_node_key(node)
+        error_stats = self._error_limiting.get(node_key)
+
+        if error_stats is None or 'errors' not in error_stats:
             return False
-        if 'last_error' in node and node['last_error'] < \
+        if 'last_error' in error_stats and error_stats['last_error'] < \
                 now - self.error_suppression_interval:
-            del node['last_error']
-            if 'errors' in node:
-                del node['errors']
+            self._error_limiting.pop(node_key, None)
             return False
-        limited = node['errors'] > self.error_suppression_limit
+        limited = error_stats['errors'] > self.error_suppression_limit
         if limited:
             self.logger.debug(
                 _('Node error limited %(ip)s:%(port)s (%(device)s)'), node)
@@ -416,11 +470,19 @@ class Application(object):
         :param node: dictionary of node to error limit
         :param msg: error message
         """
-        node['errors'] = self.error_suppression_limit + 1
-        node['last_error'] = time()
+        node_key = self._error_limit_node_key(node)
+        error_stats = self._error_limiting.setdefault(node_key, {})
+        error_stats['errors'] = self.error_suppression_limit + 1
+        error_stats['last_error'] = time()
         self.logger.error(_('%(msg)s %(ip)s:%(port)s/%(device)s'),
                           {'msg': msg, 'ip': node['ip'],
                           'port': node['port'], 'device': node['device']})
+
+    def _incr_node_errors(self, node):
+        node_key = self._error_limit_node_key(node)
+        error_stats = self._error_limiting.setdefault(node_key, {})
+        error_stats['errors'] = error_stats.get('errors', 0) + 1
+        error_stats['last_error'] = time()
 
     def error_occurred(self, node, msg):
         """
@@ -429,8 +491,7 @@ class Application(object):
         :param node: dictionary of node to handle errors for
         :param msg: error message
         """
-        node['errors'] = node.get('errors', 0) + 1
-        node['last_error'] = time()
+        self._incr_node_errors(node)
         self.logger.error(_('%(msg)s %(ip)s:%(port)s/%(device)s'),
                           {'msg': msg, 'ip': node['ip'],
                           'port': node['port'], 'device': node['device']})
@@ -438,9 +499,9 @@ class Application(object):
     def iter_nodes(self, ring, partition, node_iter=None):
         """
         Yields nodes for a ring partition, skipping over error
-        limited nodes and stopping at the configurable number of
-        nodes. If a node yielded subsequently gets error limited, an
-        extra node will be yielded to take its place.
+        limited nodes and stopping at the configurable number of nodes. If a
+        node yielded subsequently gets error limited, an extra node will be
+        yielded to take its place.
 
         Note that if you're going to iterate over this concurrently from
         multiple greenthreads, you'll want to use a
@@ -465,8 +526,9 @@ class Application(object):
         primary_nodes = self.sort_nodes(
             list(itertools.islice(node_iter, num_primary_nodes)))
         handoff_nodes = node_iter
-        nodes_left = self.request_node_count(ring)
+        nodes_left = self.request_node_count(len(primary_nodes))
 
+        log_handoffs_threshold = nodes_left - len(primary_nodes)
         for node in primary_nodes:
             if not self.error_limited(node):
                 yield node
@@ -478,11 +540,11 @@ class Application(object):
         for node in handoff_nodes:
             if not self.error_limited(node):
                 handoffs += 1
-                if self.log_handoffs:
+                if self.log_handoffs and handoffs > log_handoffs_threshold:
                     self.logger.increment('handoff_count')
                     self.logger.warning(
                         'Handoff requested (%d)' % handoffs)
-                    if handoffs == len(primary_nodes):
+                    if handoffs - log_handoffs_threshold == len(primary_nodes):
                         self.logger.increment('handoff_all_count')
                 yield node
                 if not self.error_limited(node):
@@ -490,7 +552,8 @@ class Application(object):
                     if nodes_left <= 0:
                         return
 
-    def exception_occurred(self, node, typ, additional_info):
+    def exception_occurred(self, node, typ, additional_info,
+                           **kwargs):
         """
         Handle logging of generic exceptions.
 
@@ -498,11 +561,19 @@ class Application(object):
         :param typ: server type
         :param additional_info: additional information to log
         """
-        self.logger.exception(
-            _('ERROR with %(type)s server %(ip)s:%(port)s/%(device)s re: '
-              '%(info)s'),
-            {'type': typ, 'ip': node['ip'], 'port': node['port'],
-             'device': node['device'], 'info': additional_info})
+        self._incr_node_errors(node)
+        if 'level' in kwargs:
+            log = functools.partial(self.logger.log, kwargs.pop('level'))
+            if 'exc_info' not in kwargs:
+                kwargs['exc_info'] = sys.exc_info()
+        else:
+            log = self.logger.exception
+        log(_('ERROR with %(type)s server %(ip)s:%(port)s/%(device)s'
+              ' re: %(info)s'), {
+                  'type': typ, 'ip': node['ip'], 'port':
+                  node['port'], 'device': node['device'],
+                  'info': additional_info
+              }, **kwargs)
 
     def modify_wsgi_pipeline(self, pipe):
         """
@@ -515,10 +586,7 @@ class Application(object):
         for filter_spec in reversed(required_filters):
             filter_name = filter_spec['name']
             if filter_name not in pipe:
-                if 'after_fn' in filter_spec:
-                    afters = filter_spec['after_fn'](pipe)
-                else:
-                    afters = filter_spec.get('after', [])
+                afters = filter_spec.get('after_fn', lambda _junk: [])(pipe)
                 insert_at = 0
                 for after in afters:
                     try:
@@ -543,4 +611,6 @@ def app_factory(global_conf, **local_conf):
     """paste.deploy app factory for creating WSGI proxy apps."""
     conf = global_conf.copy()
     conf.update(local_conf)
-    return Application(conf)
+    app = Application(conf)
+    app.check_config()
+    return app

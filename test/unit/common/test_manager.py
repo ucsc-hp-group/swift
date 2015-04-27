@@ -30,7 +30,7 @@ from swift.common import manager
 DUMMY_SIG = 1
 
 
-class MockOs():
+class MockOs(object):
     RAISE_EPERM_SIG = 99
 
     def __init__(self, pids):
@@ -77,7 +77,7 @@ class TestManagerModule(unittest.TestCase):
                           len(manager.REST_SERVERS))
 
     def test_setup_env(self):
-        class MockResource():
+        class MockResource(object):
             def __init__(self, error=None):
                 self.error = error
                 self.called_with_args = []
@@ -144,10 +144,12 @@ class TestManagerModule(unittest.TestCase):
         self.assert_(myfunc.publicly_accessible)
 
     def test_watch_server_pids(self):
-        class MockOs():
+        class MockOs(object):
             WNOHANG = os.WNOHANG
 
-            def __init__(self, pid_map={}):
+            def __init__(self, pid_map=None):
+                if pid_map is None:
+                    pid_map = {}
                 self.pid_map = {}
                 for pid, v in pid_map.items():
                     self.pid_map[pid] = (x for x in v)
@@ -164,7 +166,7 @@ class TestManagerModule(unittest.TestCase):
                 else:
                     return rv
 
-        class MockTime():
+        class MockTime(object):
             def __init__(self, ticks=None):
                 self.tock = time()
                 if not ticks:
@@ -182,7 +184,7 @@ class TestManagerModule(unittest.TestCase):
             def sleep(*args):
                 return
 
-        class MockServer():
+        class MockServer(object):
 
             def __init__(self, pids, run_dir=manager.RUN_DIR, zombie=0):
                 self.heartbeat = (pids for _ in range(zombie))
@@ -412,6 +414,22 @@ class TestServer(unittest.TestCase):
             conf_files = server.conf_files(number=5)
             self.assertFalse(conf_files)
 
+        # test getting specific conf
+        conf_files = (
+            'account-server/1.conf',
+            'account-server/2.conf',
+            'account-server/3.conf',
+            'account-server/4.conf',
+        )
+        with temptree(conf_files) as t:
+            manager.SWIFT_DIR = t
+            server = manager.Server('account.2')
+            conf_files = server.conf_files()
+            self.assertEquals(len(conf_files), 1)
+            conf_file = conf_files[0]
+            self.assertEquals(conf_file,
+                              self.join_swift_dir('account-server/2.conf'))
+
         # test verbose & quiet
         conf_files = (
             'auth-server.ini',
@@ -427,7 +445,8 @@ class TestServer(unittest.TestCase):
                     # check warn "unable to locate"
                     conf_files = server.conf_files()
                     self.assertFalse(conf_files)
-                    self.assert_('unable to locate' in pop_stream(f).lower())
+                    self.assert_('unable to locate config for auth'
+                                 in pop_stream(f).lower())
                     # check quiet will silence warning
                     conf_files = server.conf_files(verbose=True, quiet=True)
                     self.assertEquals(pop_stream(f), '')
@@ -437,7 +456,9 @@ class TestServer(unittest.TestCase):
                     self.assertEquals(pop_stream(f), '')
                     # check missing config number warn "unable to locate"
                     conf_files = server.conf_files(number=2)
-                    self.assert_('unable to locate' in pop_stream(f).lower())
+                    self.assert_(
+                        'unable to locate config number 2 for ' +
+                        'container-auditor' in pop_stream(f).lower())
                     # check verbose lists configs
                     conf_files = server.conf_files(number=2, verbose=True)
                     c1 = self.join_swift_dir('container-server/1.conf')
@@ -471,6 +492,32 @@ class TestServer(unittest.TestCase):
             proxy_conf_dir = self.join_swift_dir('proxy-server.conf.d')
             self.assertEquals(proxy_conf_dir, conf_dir)
 
+    def test_named_conf_dir(self):
+        conf_files = (
+            'object-server/base.conf-template',
+            'object-server/object-server.conf.d/00_base.conf',
+            'object-server/object-server.conf.d/10_server.conf',
+            'object-server/object-replication.conf.d/00_base.conf',
+            'object-server/object-replication.conf.d/10_server.conf',
+        )
+        with temptree(conf_files) as t:
+            manager.SWIFT_DIR = t
+            server = manager.Server('object.replication')
+            conf_dirs = server.conf_files()
+            self.assertEquals(len(conf_dirs), 1)
+            conf_dir = conf_dirs[0]
+            replication_server_conf_dir = self.join_swift_dir(
+                'object-server/object-replication.conf.d')
+            self.assertEquals(replication_server_conf_dir, conf_dir)
+            # and again with no named filter
+            server = manager.Server('object')
+            conf_dirs = server.conf_files()
+            self.assertEquals(len(conf_dirs), 2)
+            for named_conf in ('server', 'replication'):
+                conf_dir = self.join_swift_dir(
+                    'object-server/object-%s.conf.d' % named_conf)
+                self.assert_(conf_dir in conf_dirs)
+
     def test_conf_dir(self):
         conf_files = (
             'object-server/object-server.conf-base',
@@ -497,6 +544,29 @@ class TestServer(unittest.TestCase):
             # test configs returned sorted
             sorted_confs = sorted([c1, c2, c3, c4])
             self.assertEquals(conf_dirs, sorted_confs)
+
+    def test_named_conf_dir_pid_files(self):
+        conf_files = (
+            'object-server/object-server.pid.d',
+            'object-server/object-replication.pid.d',
+        )
+        with temptree(conf_files) as t:
+            manager.RUN_DIR = t
+            server = manager.Server('object.replication', run_dir=t)
+            pid_files = server.pid_files()
+            self.assertEquals(len(pid_files), 1)
+            pid_file = pid_files[0]
+            replication_server_pid = self.join_run_dir(
+                'object-server/object-replication.pid.d')
+            self.assertEquals(replication_server_pid, pid_file)
+            # and again with no named filter
+            server = manager.Server('object', run_dir=t)
+            pid_files = server.pid_files()
+            self.assertEquals(len(pid_files), 2)
+            for named_pid in ('server', 'replication'):
+                pid_file = self.join_run_dir(
+                    'object-server/object-%s.pid.d' % named_pid)
+                self.assert_(pid_file in pid_files)
 
     def test_iter_pid_files(self):
         """
@@ -580,6 +650,34 @@ class TestServer(unittest.TestCase):
                 # test get pids w/o matching conf
                 pids = list(server.iter_pid_files(number=5))
                 self.assertFalse(pids)
+
+        # test get pid_files by conf name
+        conf_files = (
+            'object-server/1.conf',
+            'object-server/2.conf',
+            'object-server/3.conf',
+            'object-server/4.conf',
+        )
+
+        pid_files = (
+            ('object-server/1.pid', 1),
+            ('object-server/2.pid', 2),
+            ('object-server/5.pid', 5),
+        )
+
+        with temptree(conf_files) as swift_dir:
+            manager.SWIFT_DIR = swift_dir
+            files, pids = zip(*pid_files)
+            with temptree(files, pids) as t:
+                manager.RUN_DIR = t
+                server = manager.Server('object.2', run_dir=t)
+                # test get pid with matching conf
+                pids = list(server.iter_pid_files())
+                self.assertEquals(len(pids), 1)
+                pid_file, pid = pids[0]
+                self.assertEquals(pid, 2)
+                pid_two = self.join_run_dir('object-server/2.pid')
+                self.assertEquals(pid_file, pid_two)
 
     def test_signal_pids(self):
         pid_files = (
@@ -843,7 +941,7 @@ class TestServer(unittest.TestCase):
     def test_spawn(self):
 
         # mocks
-        class MockProcess():
+        class MockProcess(object):
 
             NOTHING = 'default besides None'
             STDOUT = 'stdout'
@@ -857,7 +955,7 @@ class TestServer(unittest.TestCase):
             def Popen(self, args, **kwargs):
                 return MockProc(self.pids.next(), args, **kwargs)
 
-        class MockProc():
+        class MockProc(object):
 
             def __init__(self, pid, args, stdout=MockProcess.NOTHING,
                          stderr=MockProcess.NOTHING):
@@ -1014,7 +1112,7 @@ class TestServer(unittest.TestCase):
                 print >>self._stdout, 'mock process finished'
                 self.finished = True
 
-        class MockTime():
+        class MockTime(object):
 
             def time(self):
                 return time()
@@ -1030,7 +1128,7 @@ class TestServer(unittest.TestCase):
                 manager.WARNING_WAIT = 0.01
                 manager.time = MockTime()
                 with open(os.path.join(t, 'output'), 'w+') as f:
-                    # acctually capture the read stdout (for prints)
+                    # actually capture the read stdout (for prints)
                     sys.stdout = f
                     # test closing pipe in subprocess unblocks read
                     with MockProcess() as proc:
@@ -1073,7 +1171,7 @@ class TestServer(unittest.TestCase):
                 manager.time = old_time
 
     def test_interact(self):
-        class MockProcess():
+        class MockProcess(object):
 
             def __init__(self, fail=False):
                 self.returncode = None
@@ -1113,7 +1211,7 @@ class TestServer(unittest.TestCase):
         )
 
         #mocks
-        class MockSpawn():
+        class MockSpawn(object):
 
             def __init__(self, pids=None):
                 self.conf_files = []
@@ -1331,8 +1429,14 @@ class TestManager(unittest.TestCase):
         for s in m.servers:
             self.assert_(str(s) in replicators)
 
+    def test_iter(self):
+        m = manager.Manager(['all'])
+        self.assertEquals(len(list(m)), len(manager.ALL_SERVERS))
+        for server in m:
+            self.assert_(server.server in manager.ALL_SERVERS)
+
     def test_status(self):
-        class MockServer():
+        class MockServer(object):
 
             def __init__(self, server, run_dir=manager.RUN_DIR):
                 self.server = server
@@ -1368,13 +1472,14 @@ class TestManager(unittest.TestCase):
         def mock_setup_env():
             getattr(mock_setup_env, 'called', []).append(True)
 
-        class MockServer():
+        class MockServer(object):
             def __init__(self, server, run_dir=manager.RUN_DIR):
                 self.server = server
                 self.called = defaultdict(list)
 
             def launch(self, **kwargs):
                 self.called['launch'].append(kwargs)
+                return {}
 
             def wait(self, **kwargs):
                 self.called['wait'].append(kwargs)
@@ -1430,13 +1535,14 @@ class TestManager(unittest.TestCase):
             manager.Server = old_swift_server
 
     def test_no_wait(self):
-        class MockServer():
+        class MockServer(object):
             def __init__(self, server, run_dir=manager.RUN_DIR):
                 self.server = server
                 self.called = defaultdict(list)
 
             def launch(self, **kwargs):
                 self.called['launch'].append(kwargs)
+                return {}
 
             def wait(self, **kwargs):
                 self.called['wait'].append(kwargs)
@@ -1480,7 +1586,7 @@ class TestManager(unittest.TestCase):
             manager.Server = orig_swift_server
 
     def test_no_daemon(self):
-        class MockServer():
+        class MockServer(object):
 
             def __init__(self, server, run_dir=manager.RUN_DIR):
                 self.server = server
@@ -1488,6 +1594,7 @@ class TestManager(unittest.TestCase):
 
             def launch(self, **kwargs):
                 self.called['launch'].append(kwargs)
+                return {}
 
             def interact(self, **kwargs):
                 self.called['interact'].append(kwargs)
@@ -1515,7 +1622,7 @@ class TestManager(unittest.TestCase):
             manager.Server = orig_swift_server
 
     def test_once(self):
-        class MockServer():
+        class MockServer(object):
 
             def __init__(self, server, run_dir=manager.RUN_DIR):
                 self.server = server
@@ -1529,7 +1636,8 @@ class TestManager(unittest.TestCase):
                     return 0
 
             def launch(self, **kwargs):
-                return self.called['launch'].append(kwargs)
+                self.called['launch'].append(kwargs)
+                return {}
 
         orig_swift_server = manager.Server
         try:
@@ -1552,13 +1660,16 @@ class TestManager(unittest.TestCase):
             manager.Server = orig_swift_server
 
     def test_stop(self):
-        class MockServerFactory():
-            class MockServer():
+        class MockServerFactory(object):
+            class MockServer(object):
                 def __init__(self, pids, run_dir=manager.RUN_DIR):
                     self.pids = pids
 
                 def stop(self, **kwargs):
                     return self.pids
+
+                def status(self, **kwargs):
+                    return not self.pids
 
             def __init__(self, server_pids, run_dir=manager.RUN_DIR):
                 self.server_pids = server_pids
@@ -1593,6 +1704,14 @@ class TestManager(unittest.TestCase):
             m = manager.Manager(['test'])
             status = m.stop()
             self.assertEquals(status, 1)
+            # test kill not running
+            server_pids = {
+                'test': []
+            }
+            manager.Server = MockServerFactory(server_pids)
+            m = manager.Manager(['test'])
+            status = m.kill()
+            self.assertEquals(status, 0)
             # test won't die
             server_pids = {
                 'test': [None]
@@ -1641,7 +1760,7 @@ class TestManager(unittest.TestCase):
         self.assertEquals(m.start_was_called, True)
 
     def test_reload(self):
-        class MockManager():
+        class MockManager(object):
             called = defaultdict(list)
 
             def __init__(self, servers):

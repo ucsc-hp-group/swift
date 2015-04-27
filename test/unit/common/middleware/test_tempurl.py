@@ -1,4 +1,19 @@
-# Copyright (c) 2011 OpenStack Foundation
+# Copyright (c) 2011-2014 Greg Holt
+# Copyright (c) 2012-2013 Peter Portante
+# Copyright (c) 2012 Iryoung Jeong
+# Copyright (c) 2012 Michael Barton
+# Copyright (c) 2013 Alex Gaynor
+# Copyright (c) 2013 Chuck Thier
+# Copyright (c) 2013 David Goetz
+# Copyright (c) 2015 Donagh McCabe
+# Copyright (c) 2013 Greg Lange
+# Copyright (c) 2013 John Dickinson
+# Copyright (c) 2013 Kun Huang
+# Copyright (c) 2013 Richard Hawkins
+# Copyright (c) 2013 Samuel Merritt
+# Copyright (c) 2013 Shri Javadekar
+# Copyright (c) 2013 Tong Li
+# Copyright (c) 2013 ZhiQiang Fan
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -51,8 +66,7 @@ class TestTempURL(unittest.TestCase):
 
     def setUp(self):
         self.app = FakeApp()
-        self.auth = tempauth.filter_factory({})(self.app)
-        self.auth.reseller_prefix = 'a'
+        self.auth = tempauth.filter_factory({'reseller_prefix': ''})(self.app)
         self.tempurl = tempurl.filter_factory({})(self.auth)
 
     def _make_request(self, path, environ=None, keys=(), **kwargs):
@@ -82,6 +96,9 @@ class TestTempURL(unittest.TestCase):
             'bytes': '0',
             'meta': meta}
 
+        container_cache_key = 'swift.container/' + account + '/c'
+        environ.setdefault(container_cache_key, {'meta': {}})
+
     def test_passthrough(self):
         resp = self._make_request('/v1/a/c/o').get_response(self.tempurl)
         self.assertEquals(resp.status_int, 401)
@@ -94,16 +111,17 @@ class TestTempURL(unittest.TestCase):
             environ={'REQUEST_METHOD': 'OPTIONS'}).get_response(self.tempurl)
         self.assertEquals(resp.status_int, 200)
 
-    def assert_valid_sig(self, expires, path, keys, sig):
-        req = self._make_request(
-            path, keys=keys,
-            environ={'QUERY_STRING':
-                     'temp_url_sig=%s&temp_url_expires=%s' % (sig, expires)})
+    def assert_valid_sig(self, expires, path, keys, sig, environ=None):
+        if not environ:
+            environ = {}
+        environ['QUERY_STRING'] = 'temp_url_sig=%s&temp_url_expires=%s' % (
+            sig, expires)
+        req = self._make_request(path, keys=keys, environ=environ)
         self.tempurl.app = FakeApp(iter([('200 Ok', (), '123')]))
         resp = req.get_response(self.tempurl)
         self.assertEquals(resp.status_int, 200)
         self.assertEquals(resp.headers['content-disposition'],
-                          'attachment; filename="o"')
+                          'attachment; filename="o"; ' + "filename*=UTF-8''o")
         self.assertEquals(req.environ['swift.authorize_override'], True)
         self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
 
@@ -128,6 +146,29 @@ class TestTempURL(unittest.TestCase):
         for sig in (sig1, sig2):
             self.assert_valid_sig(expires, path, [key1, key2], sig)
 
+    def test_get_valid_container_keys(self):
+        environ = {}
+        # Add two static container keys
+        container_keys = ['me', 'other']
+        meta = {}
+        for idx, key in enumerate(container_keys):
+            meta_name = 'Temp-URL-key' + (("-%d" % (idx + 1) if idx else ""))
+            if key:
+                meta[meta_name] = key
+        environ['swift.container/a/c'] = {'meta': meta}
+
+        method = 'GET'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/o'
+        key1 = 'me'
+        key2 = 'other'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig1 = hmac.new(key1, hmac_body, sha1).hexdigest()
+        sig2 = hmac.new(key2, hmac_body, sha1).hexdigest()
+        account_keys = []
+        for sig in (sig1, sig2):
+            self.assert_valid_sig(expires, path, account_keys, sig, environ)
+
     def test_get_valid_with_filename(self):
         method = 'GET'
         expires = int(time() + 86400)
@@ -142,7 +183,8 @@ class TestTempURL(unittest.TestCase):
         resp = req.get_response(self.tempurl)
         self.assertEquals(resp.status_int, 200)
         self.assertEquals(resp.headers['content-disposition'],
-                          'attachment; filename="bob \\\"killer\\\".txt"')
+                          'attachment; filename="bob %22killer%22.txt"; ' +
+                          "filename*=UTF-8''bob%20%22killer%22.txt")
         self.assertEquals(req.environ['swift.authorize_override'], True)
         self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
 
@@ -195,6 +237,44 @@ class TestTempURL(unittest.TestCase):
         self.assertEquals(req.environ['swift.authorize_override'], True)
         self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
 
+    def test_obj_odd_chars(self):
+        method = 'GET'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/a\r\nb'
+        key = 'abc'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig = hmac.new(key, hmac_body, sha1).hexdigest()
+        req = self._make_request(path, keys=[key], environ={
+            'QUERY_STRING': 'temp_url_sig=%s&temp_url_expires=%s' % (
+                sig, expires)})
+        self.tempurl.app = FakeApp(iter([('200 Ok', (), '123')]))
+        resp = req.get_response(self.tempurl)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.headers['content-disposition'],
+                          'attachment; filename="a%0D%0Ab"; ' +
+                          "filename*=UTF-8''a%0D%0Ab")
+        self.assertEquals(req.environ['swift.authorize_override'], True)
+        self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
+
+    def test_obj_odd_chars_in_content_disposition_metadata(self):
+        method = 'GET'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/o'
+        key = 'abc'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig = hmac.new(key, hmac_body, sha1).hexdigest()
+        req = self._make_request(path, keys=[key], environ={
+            'QUERY_STRING': 'temp_url_sig=%s&temp_url_expires=%s' % (
+                sig, expires)})
+        headers = [('Content-Disposition', 'attachment; filename="fu\nbar"')]
+        self.tempurl.app = FakeApp(iter([('200 Ok', headers, '123')]))
+        resp = req.get_response(self.tempurl)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.headers['content-disposition'],
+                          'attachment; filename="fu%0Abar"')
+        self.assertEquals(req.environ['swift.authorize_override'], True)
+        self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
+
     def test_obj_trailing_slash(self):
         method = 'GET'
         expires = int(time() + 86400)
@@ -209,7 +289,8 @@ class TestTempURL(unittest.TestCase):
         resp = req.get_response(self.tempurl)
         self.assertEquals(resp.status_int, 200)
         self.assertEquals(resp.headers['content-disposition'],
-                          'attachment; filename="o"')
+                          'attachment; filename="o"; ' +
+                          "filename*=UTF-8''o")
         self.assertEquals(req.environ['swift.authorize_override'], True)
         self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
 
@@ -226,8 +307,10 @@ class TestTempURL(unittest.TestCase):
         self.tempurl.app = FakeApp(iter([('200 Ok', (), '123')]))
         resp = req.get_response(self.tempurl)
         self.assertEquals(resp.status_int, 200)
-        self.assertEquals(resp.headers['content-disposition'],
-                          'attachment; filename="/i/want/this/just/as/it/is/"')
+        self.assertEquals(
+            resp.headers['content-disposition'],
+            'attachment; filename="/i/want/this/just/as/it/is/"; ' +
+            "filename*=UTF-8''/i/want/this/just/as/it/is/")
         self.assertEquals(req.environ['swift.authorize_override'], True)
         self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
 
@@ -394,6 +477,23 @@ class TestTempURL(unittest.TestCase):
         self.assertEquals(req.environ['swift.authorize_override'], True)
         self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
 
+    def test_head_allowed_by_post(self):
+        method = 'POST'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/o'
+        key = 'abc'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig = hmac.new(key, hmac_body, sha1).hexdigest()
+        req = self._make_request(
+            path, keys=[key],
+            environ={'REQUEST_METHOD': 'HEAD',
+                     'QUERY_STRING': 'temp_url_sig=%s&temp_url_expires=%s' % (
+                         sig, expires)})
+        resp = req.get_response(self.tempurl)
+        self.assertEquals(resp.status_int, 404)
+        self.assertEquals(req.environ['swift.authorize_override'], True)
+        self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
+
     def test_head_otherwise_not_allowed(self):
         method = 'PUT'
         expires = int(time() + 86400)
@@ -413,7 +513,8 @@ class TestTempURL(unittest.TestCase):
         self.assertEquals(resp.status_int, 401)
         self.assertTrue('Www-Authenticate' in resp.headers)
 
-    def test_post_not_allowed(self):
+    def test_post_when_forbidden_by_config(self):
+        self.tempurl.methods.remove('POST')
         method = 'POST'
         expires = int(time() + 86400)
         path = '/v1/a/c/o'
@@ -430,7 +531,8 @@ class TestTempURL(unittest.TestCase):
         self.assertTrue('Temp URL invalid' in resp.body)
         self.assertTrue('Www-Authenticate' in resp.headers)
 
-    def test_delete_not_allowed(self):
+    def test_delete_when_forbidden_by_config(self):
+        self.tempurl.methods.remove('DELETE')
         method = 'DELETE'
         expires = int(time() + 86400)
         path = '/v1/a/c/o'
@@ -447,8 +549,7 @@ class TestTempURL(unittest.TestCase):
         self.assertTrue('Temp URL invalid' in resp.body)
         self.assertTrue('Www-Authenticate' in resp.headers)
 
-    def test_delete_allowed_with_conf(self):
-        self.tempurl.methods.append('DELETE')
+    def test_delete_allowed(self):
         method = 'DELETE'
         expires = int(time() + 86400)
         path = '/v1/a/c/o'
@@ -588,6 +689,44 @@ class TestTempURL(unittest.TestCase):
         self.assertEquals(
             self.app.request.headers['x-remove-this-except-this'], 'value2')
 
+    def test_allow_trumps_incoming_header_conflict(self):
+        self.tempurl = tempurl.filter_factory({
+            'incoming_remove_headers': 'x-conflict-header',
+            'incoming_allow_headers': 'x-conflict-header'})(self.auth)
+        method = 'GET'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/o'
+        key = 'abc'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig = hmac.new(key, hmac_body, sha1).hexdigest()
+        req = self._make_request(
+            path, keys=[key],
+            headers={'x-conflict-header': 'value'},
+            environ={'QUERY_STRING': 'temp_url_sig=%s&temp_url_expires=%s' % (
+                sig, expires)})
+        resp = req.get_response(self.tempurl)
+        self.assertEquals(resp.status_int, 404)
+        self.assertTrue('x-conflict-header' in self.app.request.headers)
+
+    def test_allow_trumps_incoming_header_startswith_conflict(self):
+        self.tempurl = tempurl.filter_factory({
+            'incoming_remove_headers': 'x-conflict-header-*',
+            'incoming_allow_headers': 'x-conflict-header-*'})(self.auth)
+        method = 'GET'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/o'
+        key = 'abc'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig = hmac.new(key, hmac_body, sha1).hexdigest()
+        req = self._make_request(
+            path, keys=[key],
+            headers={'x-conflict-header-test': 'value'},
+            environ={'QUERY_STRING': 'temp_url_sig=%s&temp_url_expires=%s' % (
+                sig, expires)})
+        resp = req.get_response(self.tempurl)
+        self.assertEquals(resp.status_int, 404)
+        self.assertTrue('x-conflict-header-test' in self.app.request.headers)
+
     def test_removed_outgoing_header(self):
         self.tempurl = tempurl.filter_factory({
             'outgoing_remove_headers': 'x-test-header-one-a'})(self.auth)
@@ -626,6 +765,50 @@ class TestTempURL(unittest.TestCase):
         self.assertTrue('x-test-header-two-a' not in resp.headers)
         self.assertEquals(resp.headers['x-test-header-two-b'], 'value3')
 
+    def test_allow_trumps_outgoing_header_conflict(self):
+        self.tempurl = tempurl.filter_factory({
+            'outgoing_remove_headers': 'x-conflict-header',
+            'outgoing_allow_headers': 'x-conflict-header'})(self.auth)
+        method = 'GET'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/o'
+        key = 'abc'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig = hmac.new(key, hmac_body, sha1).hexdigest()
+        req = self._make_request(
+            path, keys=[key],
+            headers={},
+            environ={'QUERY_STRING': 'temp_url_sig=%s&temp_url_expires=%s' % (
+                sig, expires)})
+        self.tempurl.app = FakeApp(iter([('200 Ok', {
+            'X-Conflict-Header': 'value'}, '123')]))
+        resp = req.get_response(self.tempurl)
+        self.assertEquals(resp.status_int, 200)
+        self.assertTrue('x-conflict-header' in resp.headers)
+        self.assertEqual(resp.headers['x-conflict-header'], 'value')
+
+    def test_allow_trumps_outgoing_header_startswith_conflict(self):
+        self.tempurl = tempurl.filter_factory({
+            'outgoing_remove_headers': 'x-conflict-header-*',
+            'outgoing_allow_headers': 'x-conflict-header-*'})(self.auth)
+        method = 'GET'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/o'
+        key = 'abc'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig = hmac.new(key, hmac_body, sha1).hexdigest()
+        req = self._make_request(
+            path, keys=[key],
+            headers={},
+            environ={'QUERY_STRING': 'temp_url_sig=%s&temp_url_expires=%s' % (
+                sig, expires)})
+        self.tempurl.app = FakeApp(iter([('200 Ok', {
+            'X-Conflict-Header-Test': 'value'}, '123')]))
+        resp = req.get_response(self.tempurl)
+        self.assertEquals(resp.status_int, 200)
+        self.assertTrue('x-conflict-header-test' in resp.headers)
+        self.assertEqual(resp.headers['x-conflict-header-test'], 'value')
+
     def test_get_account(self):
         self.assertEquals(self.tempurl._get_account({
             'REQUEST_METHOD': 'HEAD', 'PATH_INFO': '/v1/a/c/o'}), 'a')
@@ -634,9 +817,9 @@ class TestTempURL(unittest.TestCase):
         self.assertEquals(self.tempurl._get_account({
             'REQUEST_METHOD': 'PUT', 'PATH_INFO': '/v1/a/c/o'}), 'a')
         self.assertEquals(self.tempurl._get_account({
-            'REQUEST_METHOD': 'POST', 'PATH_INFO': '/v1/a/c/o'}), None)
+            'REQUEST_METHOD': 'POST', 'PATH_INFO': '/v1/a/c/o'}), 'a')
         self.assertEquals(self.tempurl._get_account({
-            'REQUEST_METHOD': 'DELETE', 'PATH_INFO': '/v1/a/c/o'}), None)
+            'REQUEST_METHOD': 'DELETE', 'PATH_INFO': '/v1/a/c/o'}), 'a')
         self.assertEquals(self.tempurl._get_account({
             'REQUEST_METHOD': 'UNKNOWN', 'PATH_INFO': '/v1/a/c/o'}), None)
         self.assertEquals(self.tempurl._get_account({
@@ -879,14 +1062,14 @@ class TestSwiftInfo(unittest.TestCase):
         swift_info = utils.get_swift_info()
         self.assertTrue('tempurl' in swift_info)
         self.assertEqual(set(swift_info['tempurl']['methods']),
-                         set(('GET', 'HEAD', 'PUT')))
+                         set(('GET', 'HEAD', 'PUT', 'POST', 'DELETE')))
 
     def test_non_default_methods(self):
-        tempurl.filter_factory({'methods': 'GET HEAD PUT POST DELETE'})
+        tempurl.filter_factory({'methods': 'GET HEAD PUT DELETE BREW'})
         swift_info = utils.get_swift_info()
         self.assertTrue('tempurl' in swift_info)
         self.assertEqual(set(swift_info['tempurl']['methods']),
-                         set(('GET', 'HEAD', 'PUT', 'POST', 'DELETE')))
+                         set(('GET', 'HEAD', 'PUT', 'DELETE', 'BREW')))
 
 
 if __name__ == '__main__':

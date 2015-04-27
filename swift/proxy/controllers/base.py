@@ -28,6 +28,8 @@ import os
 import time
 import functools
 import inspect
+import logging
+import operator
 from sys import exc_info
 from swift import gettext_ as _
 from urllib import quote
@@ -36,20 +38,21 @@ from eventlet import sleep
 from eventlet.timeout import Timeout
 
 from swift.common.wsgi import make_pre_authed_env
-from swift.common.utils import normalize_timestamp, config_true_value, \
+from swift.common.utils import Timestamp, config_true_value, \
     public, split_path, list_from_csv, GreenthreadSafeIterator, \
-    quorum_size, GreenAsyncPile
+    GreenAsyncPile, quorum_size, parse_content_range
 from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ChunkReadTimeout, ChunkWriteTimeout, \
     ConnectionTimeout
 from swift.common.http import is_informational, is_success, is_redirection, \
     is_server_error, HTTP_OK, HTTP_PARTIAL_CONTENT, HTTP_MULTIPLE_CHOICES, \
     HTTP_BAD_REQUEST, HTTP_NOT_FOUND, HTTP_SERVICE_UNAVAILABLE, \
-    HTTP_INSUFFICIENT_STORAGE, HTTP_UNAUTHORIZED
+    HTTP_INSUFFICIENT_STORAGE, HTTP_UNAUTHORIZED, HTTP_CONTINUE
 from swift.common.swob import Request, Response, HeaderKeyDict, Range, \
-    HTTPException, HTTPRequestedRangeNotSatisfiable
+    HTTPException, HTTPRequestedRangeNotSatisfiable, HTTPServiceUnavailable
 from swift.common.request_helpers import strip_sys_meta_prefix, \
     strip_user_meta_prefix, is_user_meta, is_sys_meta, is_sys_or_user_meta
+from swift.common.storage_policy import POLICIES
 
 
 def update_headers(response, headers):
@@ -76,8 +79,9 @@ def source_key(resp):
 
     :param resp: bufferedhttp response object
     """
-    return float(resp.getheader('x-put-timestamp') or
-                 resp.getheader('x-timestamp') or 0)
+    return Timestamp(resp.getheader('x-backend-timestamp') or
+                     resp.getheader('x-put-timestamp') or
+                     resp.getheader('x-timestamp') or 0)
 
 
 def delay_denial(func):
@@ -161,6 +165,8 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
         'object_count': headers.get('x-container-object-count'),
         'bytes': headers.get('x-container-bytes-used'),
         'versions': headers.get('x-versions-location'),
+        'storage_policy': headers.get('X-Backend-Storage-Policy-Index'.lower(),
+                                      '0'),
         'cors': {
             'allow_origin': meta.get('access-control-allow-origin'),
             'expose_headers': meta.get('access-control-expose-headers'),
@@ -180,7 +186,8 @@ def headers_to_object_info(headers, status_int=HTTP_OK):
             'length': headers.get('content-length'),
             'type': headers.get('content-type'),
             'etag': headers.get('etag'),
-            'meta': meta
+            'meta': meta,
+            'sysmeta': sysmeta
             }
     return info
 
@@ -212,6 +219,10 @@ def cors_validation(func):
             # Call through to the decorated method
             resp = func(*a, **kw)
 
+            if controller.app.strict_cors_mode and \
+                    not controller.is_origin_allowed(cors_info, req_origin):
+                return resp
+
             # Expose,
             #  - simple response headers,
             #    http://www.w3.org/TR/cors/#simple-response-header
@@ -219,24 +230,32 @@ def cors_validation(func):
             #  - user metadata headers
             #  - headers provided by the user in
             #    x-container-meta-access-control-expose-headers
-            expose_headers = ['cache-control', 'content-language',
-                              'content-type', 'expires', 'last-modified',
-                              'pragma', 'etag', 'x-timestamp', 'x-trans-id']
-            for header in resp.headers:
-                if header.startswith('X-Container-Meta') or \
-                        header.startswith('X-Object-Meta'):
-                    expose_headers.append(header.lower())
-            if cors_info.get('expose_headers'):
-                expose_headers.extend(
-                    [header_line.strip()
-                     for header_line in cors_info['expose_headers'].split(' ')
-                     if header_line.strip()])
-            resp.headers['Access-Control-Expose-Headers'] = \
-                ', '.join(expose_headers)
+            if 'Access-Control-Expose-Headers' not in resp.headers:
+                expose_headers = [
+                    'cache-control', 'content-language', 'content-type',
+                    'expires', 'last-modified', 'pragma', 'etag',
+                    'x-timestamp', 'x-trans-id']
+                for header in resp.headers:
+                    if header.startswith('X-Container-Meta') or \
+                            header.startswith('X-Object-Meta'):
+                        expose_headers.append(header.lower())
+                if cors_info.get('expose_headers'):
+                    expose_headers.extend(
+                        [header_line.strip()
+                         for header_line in
+                         cors_info['expose_headers'].split(' ')
+                         if header_line.strip()])
+                resp.headers['Access-Control-Expose-Headers'] = \
+                    ', '.join(expose_headers)
 
             # The user agent won't process the response if the Allow-Origin
             # header isn't included
-            resp.headers['Access-Control-Allow-Origin'] = req_origin
+            if 'Access-Control-Allow-Origin' not in resp.headers:
+                if cors_info['allow_origin'] and \
+                        cors_info['allow_origin'].strip() == '*':
+                    resp.headers['Access-Control-Allow-Origin'] = '*'
+                else:
+                    resp.headers['Access-Control-Allow-Origin'] = req_origin
 
             return resp
         else:
@@ -250,8 +269,11 @@ def get_object_info(env, app, path=None, swift_source=None):
     """
     Get the info structure for an object, based on env and app.
     This is useful to middlewares.
-    Note: This call bypasses auth. Success does not imply that the
-          request has authorization to the object.
+
+    .. note::
+
+        This call bypasses auth. Success does not imply that the request has
+        authorization to the object.
     """
     (version, account, container, obj) = \
         split_path(path or env['PATH_INFO'], 4, 4, True)
@@ -266,8 +288,11 @@ def get_container_info(env, app, swift_source=None):
     """
     Get the info structure for a container, based on env and app.
     This is useful to middlewares.
-    Note: This call bypasses auth. Success does not imply that the
-          request has authorization to the account.
+
+    .. note::
+
+        This call bypasses auth. Success does not imply that the request has
+        authorization to the container.
     """
     (version, account, container, unused) = \
         split_path(env['PATH_INFO'], 3, 4, True)
@@ -275,6 +300,7 @@ def get_container_info(env, app, swift_source=None):
                     swift_source=swift_source)
     if not info:
         info = headers_to_container_info({}, 0)
+    info.setdefault('storage_policy', '0')
     return info
 
 
@@ -282,8 +308,12 @@ def get_account_info(env, app, swift_source=None):
     """
     Get the info structure for an account, based on env and app.
     This is useful to middlewares.
-    Note: This call bypasses auth. Success does not imply that the
-          request has authorization to the container.
+
+    .. note::
+
+        This call bypasses auth. Success does not imply that the request has
+        authorization to the account.
+    :raises ValueError: when path can't be split(path, 2, 4)
     """
     (version, account, _junk, _junk) = \
         split_path(env['PATH_INFO'], 2, 4, True)
@@ -362,7 +392,7 @@ def _set_info_cache(app, env, account, container, resp):
     else:
         cache_time = None
 
-    # Next actually set both memcache and the env chache
+    # Next actually set both memcache and the env cache
     memcache = getattr(app, 'memcache', None) or env.get('swift.cache')
     if not cache_time:
         env.pop(env_key, None)
@@ -456,6 +486,9 @@ def _prepare_pre_auth_info_request(env, path, swift_source):
     # Set the env for the pre_authed call without a query string
     newenv = make_pre_authed_env(env, 'HEAD', path, agent='Swift',
                                  query_string='', swift_source=swift_source)
+    # This is a sub request for container metadata- drop the Origin header from
+    # the request so the it is not treated as a CORS request.
+    newenv.pop('HTTP_ORIGIN', None)
     # Note that Request.blank expects quoted path
     return Request.blank(quote(path), environ=newenv)
 
@@ -483,7 +516,8 @@ def get_info(app, env, account, container=None, ret_not_found=False,
     path = '/v1/%s' % account
     if container:
         # Stop and check if we have an account?
-        if not get_info(app, env, account):
+        if not get_info(app, env, account) and not account.startswith(
+                getattr(app, 'auto_create_account_prefix', '.')):
             return None
         path += '/' + container
 
@@ -560,16 +594,37 @@ def close_swift_conn(src):
         pass
 
 
+def bytes_to_skip(record_size, range_start):
+    """
+    Assume an object is composed of N records, where the first N-1 are all
+    the same size and the last is at most that large, but may be smaller.
+
+    When a range request is made, it might start with a partial record. This
+    must be discarded, lest the consumer get bad data. This is particularly
+    true of suffix-byte-range requests, e.g. "Range: bytes=-12345" where the
+    size of the object is unknown at the time the request is made.
+
+    This function computes the number of bytes that must be discarded to
+    ensure only whole records are yielded. Erasure-code decoding needs this.
+
+    This function could have been inlined, but it took enough tries to get
+    right that some targeted unit tests were desirable, hence its extraction.
+    """
+    return (record_size - (range_start % record_size)) % record_size
+
+
 class GetOrHeadHandler(object):
 
-    def __init__(self, app, req, server_type, ring, partition, path,
-                 backend_headers):
+    def __init__(self, app, req, server_type, node_iter, partition, path,
+                 backend_headers, client_chunk_size=None):
         self.app = app
-        self.ring = ring
+        self.node_iter = node_iter
         self.server_type = server_type
         self.partition = partition
         self.path = path
         self.backend_headers = backend_headers
+        self.client_chunk_size = client_chunk_size
+        self.skip_bytes = 0
         self.used_nodes = []
         self.used_source_etag = ''
 
@@ -588,9 +643,11 @@ class GetOrHeadHandler(object):
     def fast_forward(self, num_bytes):
         """
         Will skip num_bytes into the current ranges.
+
         :params num_bytes: the number of bytes that have already been read on
                            this request. This will change the Range header
                            so that the next req will start where it left off.
+
         :raises NotImplementedError: if this is a multirange request
         :raises ValueError: if invalid range header
         :raises HTTPRequestedRangeNotSatisfiable: if begin + num_bytes
@@ -614,6 +671,35 @@ class GetOrHeadHandler(object):
         else:
             self.backend_headers['Range'] = 'bytes=%d-' % num_bytes
 
+    def learn_size_from_content_range(self, start, end):
+        """
+        If client_chunk_size is set, makes sure we yield things starting on
+        chunk boundaries based on the Content-Range header in the response.
+
+        Sets our first Range header to the value learned from the
+        Content-Range header in the response; if we were given a
+        fully-specified range (e.g. "bytes=123-456"), this is a no-op.
+
+        If we were given a half-specified range (e.g. "bytes=123-" or
+        "bytes=-456"), then this changes the Range header to a
+        semantically-equivalent one *and* it lets us resume on a proper
+        boundary instead of just in the middle of a piece somewhere.
+
+        If the original request is for more than one range, this does not
+        affect our backend Range header, since we don't support resuming one
+        of those anyway.
+        """
+        if self.client_chunk_size:
+            self.skip_bytes = bytes_to_skip(self.client_chunk_size, start)
+
+        if 'Range' in self.backend_headers:
+            req_range = Range(self.backend_headers['Range'])
+
+            if len(req_range.ranges) > 1:
+                return
+
+            self.backend_headers['Range'] = "bytes=%d-%d" % (start, end)
+
     def is_good_source(self, src):
         """
         Indicates whether or not the request made to the backend found
@@ -626,51 +712,87 @@ class GetOrHeadHandler(object):
             return True
         return is_success(src.status) or is_redirection(src.status)
 
-    def _make_app_iter(self, node, source):
+    def _make_app_iter(self, req, node, source):
         """
         Returns an iterator over the contents of the source (via its read
         func).  There is also quite a bit of cleanup to ensure garbage
         collection works and the underlying socket of the source is closed.
 
+        :param req: incoming request object
         :param source: The httplib.Response object this iterator should read
                        from.
         :param node: The node the source is reading from, for logging purposes.
         """
         try:
             nchunks = 0
-            bytes_read_from_source = 0
+            client_chunk_size = self.client_chunk_size
+            bytes_consumed_from_backend = 0
+            node_timeout = self.app.node_timeout
+            if self.server_type == 'Object':
+                node_timeout = self.app.recoverable_node_timeout
+            buf = ''
             while True:
                 try:
-                    with ChunkReadTimeout(self.app.node_timeout):
+                    with ChunkReadTimeout(node_timeout):
                         chunk = source.read(self.app.object_chunk_size)
                         nchunks += 1
-                        bytes_read_from_source += len(chunk)
+                        buf += chunk
                 except ChunkReadTimeout:
                     exc_type, exc_value, exc_traceback = exc_info()
                     if self.newest or self.server_type != 'Object':
                         raise exc_type, exc_value, exc_traceback
                     try:
-                        self.fast_forward(bytes_read_from_source)
+                        self.fast_forward(bytes_consumed_from_backend)
                     except (NotImplementedError, HTTPException, ValueError):
                         raise exc_type, exc_value, exc_traceback
+                    buf = ''
                     new_source, new_node = self._get_source_and_node()
                     if new_source:
                         self.app.exception_occurred(
                             node, _('Object'),
-                            _('Trying to read during GET (retrying)'))
+                            _('Trying to read during GET (retrying)'),
+                            level=logging.ERROR, exc_info=(
+                                exc_type, exc_value, exc_traceback))
                         # Close-out the connection as best as possible.
                         if getattr(source, 'swift_conn', None):
                             close_swift_conn(source)
                         source = new_source
                         node = new_node
-                        bytes_read_from_source = 0
                         continue
                     else:
                         raise exc_type, exc_value, exc_traceback
+
+                if buf and self.skip_bytes:
+                    if self.skip_bytes < len(buf):
+                        buf = buf[self.skip_bytes:]
+                        bytes_consumed_from_backend += self.skip_bytes
+                        self.skip_bytes = 0
+                    else:
+                        self.skip_bytes -= len(buf)
+                        bytes_consumed_from_backend += len(buf)
+                        buf = ''
+
                 if not chunk:
+                    if buf:
+                        with ChunkWriteTimeout(self.app.client_timeout):
+                            bytes_consumed_from_backend += len(buf)
+                            yield buf
+                        buf = ''
                     break
-                with ChunkWriteTimeout(self.app.client_timeout):
-                    yield chunk
+
+                if client_chunk_size is not None:
+                    while len(buf) >= client_chunk_size:
+                        client_chunk = buf[:client_chunk_size]
+                        buf = buf[client_chunk_size:]
+                        with ChunkWriteTimeout(self.app.client_timeout):
+                            yield client_chunk
+                        bytes_consumed_from_backend += len(client_chunk)
+                else:
+                    with ChunkWriteTimeout(self.app.client_timeout):
+                        yield buf
+                    bytes_consumed_from_backend += len(buf)
+                    buf = ''
+
                 # This is for fairness; if the network is outpacing the CPU,
                 # we'll always be able to read and write data without
                 # encountering an EWOULDBLOCK, and so eventlet will not switch
@@ -698,7 +820,8 @@ class GetOrHeadHandler(object):
                 self.app.client_timeout)
             self.app.logger.increment('client_timeouts')
         except GeneratorExit:
-            self.app.logger.warn(_('Client disconnected on read'))
+            if not req.environ.get('swift.non_client_disconnect'):
+                self.app.logger.warn(_('Client disconnected on read'))
         except Exception:
             self.app.logger.exception(_('Trying to send to client'))
             raise
@@ -708,14 +831,16 @@ class GetOrHeadHandler(object):
                 close_swift_conn(source)
 
     def _get_source_and_node(self):
-
         self.statuses = []
         self.reasons = []
         self.bodies = []
         self.source_headers = []
         sources = []
 
-        for node in self.app.iter_nodes(self.ring, self.partition):
+        node_timeout = self.app.node_timeout
+        if self.server_type == 'Object' and not self.newest:
+            node_timeout = self.app.recoverable_node_timeout
+        for node in self.node_iter:
             if node in self.used_nodes:
                 continue
             start_node_timing = time.time()
@@ -728,7 +853,7 @@ class GetOrHeadHandler(object):
                         query_string=self.req_query_string)
                 self.app.set_node_timing(node, time.time() - start_node_timing)
 
-                with Timeout(self.app.node_timeout):
+                with Timeout(node_timeout):
                     possible_source = conn.getresponse()
                     # See NOTE: swift_conn at top of file about this.
                     possible_source.swift_conn = conn
@@ -751,8 +876,10 @@ class GetOrHeadHandler(object):
                         src_headers = dict(
                             (k.lower(), v) for k, v in
                             possible_source.getheaders())
-                        if src_headers.get('etag', '').strip('"') != \
-                                self.used_source_etag:
+
+                        if self.used_source_etag != src_headers.get(
+                                'x-object-sysmeta-ec-etag',
+                                src_headers.get('etag', '')).strip('"'):
                             self.statuses.append(HTTP_NOT_FOUND)
                             self.reasons.append('')
                             self.bodies.append('')
@@ -790,7 +917,9 @@ class GetOrHeadHandler(object):
             src_headers = dict(
                 (k.lower(), v) for k, v in
                 possible_source.getheaders())
-            self.used_source_etag = src_headers.get('etag', '').strip('"')
+            self.used_source_etag = src_headers.get(
+                'x-object-sysmeta-ec-etag',
+                src_headers.get('etag', '')).strip('"')
             return source, node
         return None, None
 
@@ -799,13 +928,17 @@ class GetOrHeadHandler(object):
         res = None
         if source:
             res = Response(request=req)
-            if req.method == 'GET' and \
-                    source.status in (HTTP_OK, HTTP_PARTIAL_CONTENT):
-                res.app_iter = self._make_app_iter(node, source)
-                # See NOTE: swift_conn at top of file about this.
-                res.swift_conn = source.swift_conn
             res.status = source.status
             update_headers(res, source.getheaders())
+            if req.method == 'GET' and \
+                    source.status in (HTTP_OK, HTTP_PARTIAL_CONTENT):
+                cr = res.headers.get('Content-Range')
+                if cr:
+                    start, end, total = parse_content_range(cr)
+                    self.learn_size_from_content_range(start, end)
+                res.app_iter = self._make_app_iter(req, node, source)
+                # See NOTE: swift_conn at top of file about this.
+                res.swift_conn = source.swift_conn
             if not res.environ:
                 res.environ = {}
             res.environ['swift_x_timestamp'] = \
@@ -890,7 +1023,7 @@ class Controller(object):
         headers = HeaderKeyDict(additional) if additional else HeaderKeyDict()
         if transfer:
             self.transfer_headers(orig_req.headers, headers)
-        headers.setdefault('x-timestamp', normalize_timestamp(time.time()))
+        headers.setdefault('x-timestamp', Timestamp(time.time()).internal)
         if orig_req:
             referer = orig_req.as_referer()
         else:
@@ -951,6 +1084,8 @@ class Controller(object):
         else:
             info['partition'] = part
             info['nodes'] = nodes
+        if info.get('storage_policy') is None:
+            info['storage_policy'] = 0
         return info
 
     def _make_request(self, nodes, part, method, path, headers, query,
@@ -966,8 +1101,7 @@ class Controller(object):
         :param method: the method to send to the backend
         :param path: the path to send to the backend
                      (full path ends up being /<$device>/<$part>/<$path>)
-        :param headers: a list of dicts, where each dict represents one
-                        backend request that should be made.
+        :param headers: dictionary of headers
         :param query: query string to send to the backend.
         :param logger_thread_locals: The thread local values to be set on the
                                      self.app.logger to retain transaction
@@ -993,6 +1127,14 @@ class Controller(object):
                     elif resp.status == HTTP_INSUFFICIENT_STORAGE:
                         self.app.error_limit(node,
                                              _('ERROR Insufficient Storage'))
+                    elif is_server_error(resp.status):
+                        self.app.error_occurred(
+                            node, _('ERROR %(status)d '
+                                    'Trying to %(method)s %(path)s'
+                                    'From Container Server') % {
+                                        'status': resp.status,
+                                        'method': method,
+                                        'path': path})
             except (Exception, Timeout):
                 self.app.exception_occurred(
                     node, self.server_type,
@@ -1000,7 +1142,7 @@ class Controller(object):
                     {'method': method, 'path': path})
 
     def make_requests(self, req, ring, part, method, path, headers,
-                      query_string=''):
+                      query_string='', overrides=None):
         """
         Sends an HTTP request to multiple nodes and aggregates the results.
         It attempts the primary nodes concurrently, then iterates over the
@@ -1015,6 +1157,8 @@ class Controller(object):
         :param headers: a list of dicts, where each dict represents one
                         backend request that should be made.
         :param query_string: optional query string to send to the backend
+        :param overrides: optional return status override map used to override
+                          the returned status of a request.
         :returns: a swob.Response object
         """
         start_nodes = ring.get_part_nodes(part)
@@ -1033,13 +1177,25 @@ class Controller(object):
             if self.have_quorum(statuses, len(start_nodes)):
                 break
         # give any pending requests *some* chance to finish
-        pile.waitall(self.app.post_quorum_timeout)
+        finished_quickly = pile.waitall(self.app.post_quorum_timeout)
+        for resp in finished_quickly:
+            if not resp:
+                continue
+            response.append(resp)
+            statuses.append(resp[0])
         while len(response) < len(start_nodes):
             response.append((HTTP_SERVICE_UNAVAILABLE, '', '', ''))
         statuses, reasons, resp_headers, bodies = zip(*response)
         return self.best_response(req, statuses, reasons, bodies,
                                   '%s %s' % (self.server_type, req.method),
-                                  headers=resp_headers)
+                                  overrides=overrides, headers=resp_headers)
+
+    def _quorum_size(self, n):
+        """
+        Number of successful backend responses needed for the proxy to
+        consider the client request successful.
+        """
+        return quorum_size(n)
 
     def have_quorum(self, statuses, node_count):
         """
@@ -1050,16 +1206,18 @@ class Controller(object):
         :param node_count: number of nodes being queried (basically ring count)
         :returns: True or False, depending on if quorum is established
         """
-        quorum = quorum_size(node_count)
+        quorum = self._quorum_size(node_count)
         if len(statuses) >= quorum:
-            for hundred in (HTTP_OK, HTTP_MULTIPLE_CHOICES, HTTP_BAD_REQUEST):
+            for hundred in (HTTP_CONTINUE, HTTP_OK, HTTP_MULTIPLE_CHOICES,
+                            HTTP_BAD_REQUEST):
                 if sum(1 for s in statuses
                        if hundred <= s < hundred + 100) >= quorum:
                     return True
         return False
 
     def best_response(self, req, statuses, reasons, bodies, server_type,
-                      etag=None, headers=None):
+                      etag=None, headers=None, overrides=None,
+                      quorum_size=None):
         """
         Given a list of responses from several servers, choose the best to
         return to the API.
@@ -1071,27 +1229,65 @@ class Controller(object):
         :param server_type: type of server the responses came from
         :param etag: etag
         :param headers: headers of each response
+        :param overrides: overrides to apply when lacking quorum
+        :param quorum_size: quorum size to use
         :returns: swob.Response object with the correct status, body, etc. set
         """
-        resp = Response(request=req)
-        if len(statuses):
-            for hundred in (HTTP_OK, HTTP_MULTIPLE_CHOICES, HTTP_BAD_REQUEST):
-                hstatuses = \
-                    [s for s in statuses if hundred <= s < hundred + 100]
-                if len(hstatuses) >= quorum_size(len(statuses)):
-                    status = max(hstatuses)
-                    status_index = statuses.index(status)
-                    resp.status = '%s %s' % (status, reasons[status_index])
-                    resp.body = bodies[status_index]
-                    if headers:
-                        update_headers(resp, headers[status_index])
-                    if etag:
-                        resp.headers['etag'] = etag.strip('"')
-                    return resp
-        self.app.logger.error(_('%(type)s returning 503 for %(statuses)s'),
-                              {'type': server_type, 'statuses': statuses})
-        resp.status = '503 Internal Server Error'
+        if quorum_size is None:
+            quorum_size = self._quorum_size(len(statuses))
+
+        resp = self._compute_quorum_response(
+            req, statuses, reasons, bodies, etag, headers,
+            quorum_size=quorum_size)
+        if overrides and not resp:
+            faked_up_status_indices = set()
+            transformed = []
+            for (i, (status, reason, hdrs, body)) in enumerate(zip(
+                    statuses, reasons, headers, bodies)):
+                if status in overrides:
+                    faked_up_status_indices.add(i)
+                    transformed.append((overrides[status], '', '', ''))
+                else:
+                    transformed.append((status, reason, hdrs, body))
+            statuses, reasons, headers, bodies = zip(*transformed)
+            resp = self._compute_quorum_response(
+                req, statuses, reasons, bodies, etag, headers,
+                indices_to_avoid=faked_up_status_indices,
+                quorum_size=quorum_size)
+
+        if not resp:
+            resp = HTTPServiceUnavailable(request=req)
+            self.app.logger.error(_('%(type)s returning 503 for %(statuses)s'),
+                                  {'type': server_type, 'statuses': statuses})
+
         return resp
+
+    def _compute_quorum_response(self, req, statuses, reasons, bodies, etag,
+                                 headers, quorum_size, indices_to_avoid=()):
+        if not statuses:
+            return None
+        for hundred in (HTTP_OK, HTTP_MULTIPLE_CHOICES, HTTP_BAD_REQUEST):
+            hstatuses = \
+                [(i, s) for i, s in enumerate(statuses)
+                 if hundred <= s < hundred + 100]
+            if len(hstatuses) >= quorum_size:
+                resp = Response(request=req)
+                try:
+                    status_index, status = max(
+                        ((i, stat) for i, stat in hstatuses
+                            if i not in indices_to_avoid),
+                        key=operator.itemgetter(1))
+                except ValueError:
+                    # All statuses were indices to avoid
+                    continue
+                resp.status = '%s %s' % (status, reasons[status_index])
+                resp.body = bodies[status_index]
+                if headers:
+                    update_headers(resp, headers[status_index])
+                if etag:
+                    resp.headers['etag'] = etag.strip('"')
+                return resp
+        return None
 
     @public
     def GET(self, req):
@@ -1113,7 +1309,7 @@ class Controller(object):
         """
         return self.GETorHEAD(req)
 
-    def autocreate_account(self, env, account):
+    def autocreate_account(self, req, account):
         """
         Autocreate an account
 
@@ -1122,34 +1318,42 @@ class Controller(object):
         """
         partition, nodes = self.app.account_ring.get_nodes(account)
         path = '/%s' % account
-        headers = {'X-Timestamp': normalize_timestamp(time.time()),
+        headers = {'X-Timestamp': Timestamp(time.time()).internal,
                    'X-Trans-Id': self.trans_id,
                    'Connection': 'close'}
+        # transfer any x-account-sysmeta headers from original request
+        # to the autocreate PUT
+        headers.update((k, v)
+                       for k, v in req.headers.iteritems()
+                       if is_sys_meta('account', k))
         resp = self.make_requests(Request.blank('/v1' + path),
                                   self.app.account_ring, partition, 'PUT',
                                   path, [headers] * len(nodes))
         if is_success(resp.status_int):
             self.app.logger.info('autocreate account %r' % path)
-            clear_info_cache(self.app, env, account)
+            clear_info_cache(self.app, req.environ, account)
         else:
             self.app.logger.warning('Could not autocreate account %r' % path)
 
-    def GETorHEAD_base(self, req, server_type, ring, partition, path):
+    def GETorHEAD_base(self, req, server_type, node_iter, partition, path,
+                       client_chunk_size=None):
         """
         Base handler for HTTP GET or HEAD requests.
 
         :param req: swob.Request object
-        :param server_type: server type
-        :param ring: the ring to obtain nodes from
+        :param server_type: server type used in logging
+        :param node_iter: an iterator to obtain nodes from
         :param partition: partition
         :param path: path for the request
+        :param client_chunk_size: chunk size for response body iterator
         :returns: swob.Response object
         """
         backend_headers = self.generate_request_headers(
             req, additional=req.headers)
 
-        handler = GetOrHeadHandler(self.app, req, server_type, ring,
-                                   partition, path, backend_headers)
+        handler = GetOrHeadHandler(self.app, req, self.server_type, node_iter,
+                                   partition, path, backend_headers,
+                                   client_chunk_size=client_chunk_size)
         res = handler.get_working_response(req)
 
         if not res:
@@ -1168,6 +1372,20 @@ class Controller(object):
                                    container, obj, res)
         except ValueError:
             pass
+        # if a backend policy index is present in resp headers, translate it
+        # here with the friendly policy name
+        if 'X-Backend-Storage-Policy-Index' in res.headers and \
+                is_success(res.status_int):
+            policy = \
+                POLICIES.get_by_index(
+                    res.headers['X-Backend-Storage-Policy-Index'])
+            if policy:
+                res.headers['X-Storage-Policy'] = policy.name
+            else:
+                self.app.logger.error(
+                    'Could not translate %s (%r) from %r to policy',
+                    'X-Backend-Storage-Policy-Index',
+                    res.headers['X-Backend-Storage-Policy-Index'], path)
         return res
 
     def is_origin_allowed(self, cors_info, origin):
@@ -1235,7 +1453,10 @@ class Controller(object):
                 list_from_csv(req.headers['Access-Control-Request-Headers']))
 
         # Populate the response with the CORS preflight headers
-        headers['access-control-allow-origin'] = req_origin_value
+        if cors.get('allow_origin', '').strip() == '*':
+            headers['access-control-allow-origin'] = '*'
+        else:
+            headers['access-control-allow-origin'] = req_origin_value
         if cors.get('max_age') is not None:
             headers['access-control-max-age'] = cors.get('max_age')
         headers['access-control-allow-methods'] = \

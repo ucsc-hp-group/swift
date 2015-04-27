@@ -15,13 +15,15 @@
 
 "Tests for swift.common.swob"
 
-import unittest
 import datetime
+import unittest
 import re
+import time
 from StringIO import StringIO
 from urllib import quote
 
 import swift.common.swob
+from swift.common import utils, exceptions
 
 
 class TestHeaderEnvironProxy(unittest.TestCase):
@@ -177,17 +179,21 @@ class TestRange(unittest.TestCase):
         self.assertEquals(range.ranges_for_length(5), [(4, 5), (0, 5)])
 
     def test_ranges_for_length_multi(self):
-        range = swift.common.swob.Range('bytes=-20,4-,30-150,-10')
-        # the length of the ranges should be 4
-        self.assertEquals(len(range.ranges_for_length(200)), 4)
+        range = swift.common.swob.Range('bytes=-20,4-')
+        self.assertEquals(len(range.ranges_for_length(200)), 2)
 
-        # the actual length less than any of the range
-        self.assertEquals(range.ranges_for_length(90),
-                          [(70, 90), (4, 90), (30, 90), (80, 90)])
+        # the actual length greater than each range element
+        self.assertEquals(range.ranges_for_length(200), [(180, 200), (4, 200)])
+
+        range = swift.common.swob.Range('bytes=30-150,-10')
+        self.assertEquals(len(range.ranges_for_length(200)), 2)
+
+        # the actual length lands in the middle of a range
+        self.assertEquals(range.ranges_for_length(90), [(30, 90), (80, 90)])
 
         # the actual length greater than any of the range
         self.assertEquals(range.ranges_for_length(200),
-                          [(180, 200), (4, 200), (30, 151), (190, 200)])
+                          [(30, 151), (190, 200)])
 
         self.assertEquals(range.ranges_for_length(None), None)
 
@@ -203,6 +209,56 @@ class TestRange(unittest.TestCase):
         range = swift.common.swob.Range('bytes=-7, 0-1')
         self.assertEquals(range.ranges_for_length(5),
                           [(0, 5), (0, 2)])
+
+    def test_ranges_for_length_overlapping(self):
+        # Fewer than 3 overlaps is okay
+        range = swift.common.swob.Range('bytes=10-19,15-24')
+        self.assertEquals(range.ranges_for_length(100),
+                          [(10, 20), (15, 25)])
+        range = swift.common.swob.Range('bytes=10-19,15-24,20-29')
+        self.assertEquals(range.ranges_for_length(100),
+                          [(10, 20), (15, 25), (20, 30)])
+
+        # Adjacent ranges, though suboptimal, don't overlap
+        range = swift.common.swob.Range('bytes=10-19,20-29,30-39')
+        self.assertEquals(range.ranges_for_length(100),
+                          [(10, 20), (20, 30), (30, 40)])
+
+        # Ranges that share a byte do overlap
+        range = swift.common.swob.Range('bytes=10-20,20-30,30-40,40-50')
+        self.assertEquals(range.ranges_for_length(100), [])
+
+        # With suffix byte range specs (e.g. bytes=-2), make sure that we
+        # correctly determine overlapping-ness based on the entity length
+        range = swift.common.swob.Range('bytes=10-15,15-20,30-39,-9')
+        self.assertEquals(range.ranges_for_length(100),
+                          [(10, 16), (15, 21), (30, 40), (91, 100)])
+        self.assertEquals(range.ranges_for_length(20), [])
+
+    def test_ranges_for_length_nonascending(self):
+        few_ranges = ("bytes=100-109,200-209,300-309,500-509,"
+                      "400-409,600-609,700-709")
+        many_ranges = few_ranges + ",800-809"
+
+        range = swift.common.swob.Range(few_ranges)
+        self.assertEquals(range.ranges_for_length(100000),
+                          [(100, 110), (200, 210), (300, 310), (500, 510),
+                           (400, 410), (600, 610), (700, 710)])
+
+        range = swift.common.swob.Range(many_ranges)
+        self.assertEquals(range.ranges_for_length(100000), [])
+
+    def test_ranges_for_length_too_many(self):
+        at_the_limit_ranges = (
+            "bytes=" + ",".join("%d-%d" % (x * 1000, x * 1000 + 10)
+                                for x in range(50)))
+        too_many_ranges = at_the_limit_ranges + ",10000000-10000009"
+
+        rng = swift.common.swob.Range(at_the_limit_ranges)
+        self.assertEquals(len(rng.ranges_for_length(1000000000)), 50)
+
+        rng = swift.common.swob.Range(too_many_ranges)
+        self.assertEquals(rng.ranges_for_length(1000000000), [])
 
     def test_range_invalid_syntax(self):
 
@@ -347,7 +403,6 @@ class TestRequest(unittest.TestCase):
         self.assertEquals(req.query_string, 'a=b&c=d')
         self.assertEquals(req.environ['QUERY_STRING'], 'a=b&c=d')
         req = blank('/', if_match='*')
-        self.assertEquals(req.if_match, '*')
         self.assertEquals(req.environ['HTTP_IF_MATCH'], '*')
         self.assertEquals(req.headers['If-Match'], '*')
 
@@ -366,7 +421,6 @@ class TestRequest(unittest.TestCase):
         self.assertEquals(req.user_agent, 'curl/7.22.0 (x86_64-pc-linux-gnu)')
         self.assertEquals(req.query_string, 'a=b&c=d')
         self.assertEquals(req.environ['QUERY_STRING'], 'a=b&c=d')
-        self.assertEquals(req.if_match, '*')
 
     def test_invalid_req_environ_property_args(self):
         # getter only property
@@ -387,7 +441,7 @@ class TestRequest(unittest.TestCase):
         else:
             self.assert_(False, "invalid req_environ_property "
                          "didn't raise error!")
-        # non-existant attribute
+        # non-existent attribute
         try:
             swift.common.swob.Request.blank('/', params_cache={'a': 'b'})
         except TypeError as e:
@@ -464,6 +518,25 @@ class TestRequest(unittest.TestCase):
         req = swift.common.swob.Request.blank('/?a=b&c=d')
         self.assertEquals(req.params['a'], 'b')
         self.assertEquals(req.params['c'], 'd')
+
+    def test_timestamp_missing(self):
+        req = swift.common.swob.Request.blank('/')
+        self.assertRaises(exceptions.InvalidTimestamp,
+                          getattr, req, 'timestamp')
+
+    def test_timestamp_invalid(self):
+        req = swift.common.swob.Request.blank(
+            '/', headers={'X-Timestamp': 'asdf'})
+        self.assertRaises(exceptions.InvalidTimestamp,
+                          getattr, req, 'timestamp')
+
+    def test_timestamp(self):
+        req = swift.common.swob.Request.blank(
+            '/', headers={'X-Timestamp': '1402447134.13507_00000001'})
+        expected = utils.Timestamp('1402447134.13507', offset=1)
+        self.assertEqual(req.timestamp, expected)
+        self.assertEqual(req.timestamp.normal, expected.normal)
+        self.assertEqual(req.timestamp.internal, expected.internal)
 
     def test_path(self):
         req = swift.common.swob.Request.blank('/hi?a=b&c=d')
@@ -602,6 +675,28 @@ class TestRequest(unittest.TestCase):
         self.assertEquals('Me realm="whatever"',
                           resp.headers['Www-Authenticate'])
 
+    def test_401_www_authenticate_is_quoted(self):
+
+        def test_app(environ, start_response):
+            start_response('401 Unauthorized', [])
+            return ['hi']
+
+        hacker = 'account-name\n\n<b>foo<br>'  # url injection test
+        quoted_hacker = quote(hacker)
+        req = swift.common.swob.Request.blank('/v1/' + hacker)
+        resp = req.get_response(test_app)
+        self.assertEquals(resp.status_int, 401)
+        self.assert_('Www-Authenticate' in resp.headers)
+        self.assertEquals('Swift realm="%s"' % quoted_hacker,
+                          resp.headers['Www-Authenticate'])
+
+        req = swift.common.swob.Request.blank('/v1/' + quoted_hacker)
+        resp = req.get_response(test_app)
+        self.assertEquals(resp.status_int, 401)
+        self.assert_('Www-Authenticate' in resp.headers)
+        self.assertEquals('Swift realm="%s"' % quoted_hacker,
+                          resp.headers['Www-Authenticate'])
+
     def test_not_401(self):
 
         # Other status codes should not have WWW-Authenticate in response
@@ -646,12 +741,17 @@ class TestRequest(unittest.TestCase):
         self.assertEquals(req.headers['If-Unmodified-Since'], 'something')
         self.assertEquals(req.if_unmodified_since, None)
 
-        req.if_unmodified_since = -1
-        self.assertRaises(ValueError, lambda: req.if_unmodified_since)
-
         self.assert_('If-Unmodified-Since' in req.headers)
         req.if_unmodified_since = None
         self.assert_('If-Unmodified-Since' not in req.headers)
+
+        too_big_date_list = list(datetime.datetime.max.timetuple())
+        too_big_date_list[0] += 1  # bump up the year
+        too_big_date = time.strftime(
+            "%a, %d %b %Y %H:%M:%S UTC", time.struct_time(too_big_date_list))
+
+        req.if_unmodified_since = too_big_date
+        self.assertEqual(req.if_unmodified_since, None)
 
     def test_bad_range(self):
         req = swift.common.swob.Request.blank('/hi/there', body='hi')
@@ -1034,6 +1134,19 @@ class TestResponse(unittest.TestCase):
         ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://www.google.com/')
 
+    def test_location_no_rewrite_when_told_not_to(self):
+        def start_response(env, headers):
+            pass
+        req = swift.common.swob.Request.blank(
+            '/', environ={'SERVER_NAME': 'local', 'SERVER_PORT': 81,
+                          'swift.leave_relative_location': True})
+        del req.environ['HTTP_HOST']
+        resp = self._get_response()
+        resp.location = '/something'
+        # read response
+        ''.join(resp(req.environ, start_response))
+        self.assertEquals(resp.location, '/something')
+
     def test_app_iter(self):
         def start_response(env, headers):
             pass
@@ -1306,10 +1419,340 @@ class TestResponse(unittest.TestCase):
             '<html><h1>Insufficient Storage</h1><p>There was not enough space '
             'to save the resource. Drive: sda1</p></html>')
 
+    def test_200_with_body_and_headers(self):
+        headers = {'Content-Length': '0'}
+        content = 'foo'
+        resp = swift.common.swob.HTTPOk(body=content, headers=headers)
+        self.assertEquals(resp.body, content)
+        self.assertEquals(resp.content_length, len(content))
+
+    def test_init_with_body_headers_app_iter(self):
+        # body exists but no headers and no app_iter
+        body = 'ok'
+        resp = swift.common.swob.Response(body=body)
+        self.assertEquals(resp.body, body)
+        self.assertEquals(resp.content_length, len(body))
+
+        # body and headers with 0 content_length exist but no app_iter
+        body = 'ok'
+        resp = swift.common.swob.Response(
+            body=body, headers={'Content-Length': '0'})
+        self.assertEquals(resp.body, body)
+        self.assertEquals(resp.content_length, len(body))
+
+        # body and headers with content_length exist but no app_iter
+        body = 'ok'
+        resp = swift.common.swob.Response(
+            body=body, headers={'Content-Length': '5'})
+        self.assertEquals(resp.body, body)
+        self.assertEquals(resp.content_length, len(body))
+
+        # body and headers with no content_length exist but no app_iter
+        body = 'ok'
+        resp = swift.common.swob.Response(body=body, headers={})
+        self.assertEquals(resp.body, body)
+        self.assertEquals(resp.content_length, len(body))
+
+        # body, headers with content_length and app_iter exist
+        resp = swift.common.swob.Response(
+            body='ok', headers={'Content-Length': '5'}, app_iter=iter([]))
+        self.assertEquals(resp.content_length, 5)
+        self.assertEquals(resp.body, '')
+
+        # headers with content_length and app_iter exist but no body
+        resp = swift.common.swob.Response(
+            headers={'Content-Length': '5'}, app_iter=iter([]))
+        self.assertEquals(resp.content_length, 5)
+        self.assertEquals(resp.body, '')
+
+        # app_iter exists but no body and headers
+        resp = swift.common.swob.Response(app_iter=iter([]))
+        self.assertEquals(resp.content_length, None)
+        self.assertEquals(resp.body, '')
+
 
 class TestUTC(unittest.TestCase):
     def test_tzname(self):
         self.assertEquals(swift.common.swob.UTC.tzname(None), 'UTC')
+
+
+class TestConditionalIfNoneMatch(unittest.TestCase):
+    def fake_app(self, environ, start_response):
+        start_response('200 OK', [('Etag', 'the-etag')])
+        return ['hi']
+
+    def fake_start_response(*a, **kw):
+        pass
+
+    def test_simple_match(self):
+        # etag matches --> 304
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-None-Match': 'the-etag'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(body, '')
+
+    def test_quoted_simple_match(self):
+        # double quotes don't matter
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-None-Match': '"the-etag"'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(body, '')
+
+    def test_list_match(self):
+        # it works with lists of etags to match
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-None-Match': '"bert", "the-etag", "ernie"'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(body, '')
+
+    def test_list_no_match(self):
+        # no matches --> whatever the original status was
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-None-Match': '"bert", "ernie"'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_match_star(self):
+        # "*" means match anything; see RFC 2616 section 14.24
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-None-Match': '*'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(body, '')
+
+
+class TestConditionalIfMatch(unittest.TestCase):
+    def fake_app(self, environ, start_response):
+        start_response('200 OK', [('Etag', 'the-etag')])
+        return ['hi']
+
+    def fake_start_response(*a, **kw):
+        pass
+
+    def test_simple_match(self):
+        # if etag matches, proceed as normal
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-Match': 'the-etag'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_simple_conditional_etag_match(self):
+        # if etag matches, proceed as normal
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-Match': 'not-the-etag'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        resp._conditional_etag = 'not-the-etag'
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_quoted_simple_match(self):
+        # double quotes or not, doesn't matter
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-Match': '"the-etag"'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_no_match(self):
+        # no match --> 412
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-Match': 'not-the-etag'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 412)
+        self.assertEquals(body, '')
+
+    def test_simple_conditional_etag_no_match(self):
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-Match': 'the-etag'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        resp._conditional_etag = 'not-the-etag'
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 412)
+        self.assertEquals(body, '')
+
+    def test_match_star(self):
+        # "*" means match anything; see RFC 2616 section 14.24
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-Match': '*'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_match_star_on_404(self):
+
+        def fake_app_404(environ, start_response):
+            start_response('404 Not Found', [])
+            return ['hi']
+
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-Match': '*'})
+        resp = req.get_response(fake_app_404)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 412)
+        self.assertEquals(body, '')
+
+
+class TestConditionalIfModifiedSince(unittest.TestCase):
+    def fake_app(self, environ, start_response):
+        start_response(
+            '200 OK', [('Last-Modified', 'Thu, 27 Feb 2014 03:29:37 GMT')])
+        return ['hi']
+
+    def fake_start_response(*a, **kw):
+        pass
+
+    def test_absent(self):
+        req = swift.common.swob.Request.blank('/')
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_before(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Modified-Since': 'Thu, 27 Feb 2014 03:29:36 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_same(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Modified-Since': 'Thu, 27 Feb 2014 03:29:37 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(body, '')
+
+    def test_greater(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Modified-Since': 'Thu, 27 Feb 2014 03:29:38 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(body, '')
+
+    def test_out_of_range_is_ignored(self):
+        # All that datetime gives us is a ValueError or OverflowError when
+        # something is out of range (i.e. less than datetime.datetime.min or
+        # greater than datetime.datetime.max). Unfortunately, we can't
+        # distinguish between a date being too old and a date being too new,
+        # so the best we can do is ignore such headers.
+        max_date_list = list(datetime.datetime.max.timetuple())
+        max_date_list[0] += 1  # bump up the year
+        too_big_date_header = time.strftime(
+            "%a, %d %b %Y %H:%M:%S GMT", time.struct_time(max_date_list))
+
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Modified-Since': too_big_date_header})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+
+class TestConditionalIfUnmodifiedSince(unittest.TestCase):
+    def fake_app(self, environ, start_response):
+        start_response(
+            '200 OK', [('Last-Modified', 'Thu, 20 Feb 2014 03:29:37 GMT')])
+        return ['hi']
+
+    def fake_start_response(*a, **kw):
+        pass
+
+    def test_absent(self):
+        req = swift.common.swob.Request.blank('/')
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_before(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Unmodified-Since': 'Thu, 20 Feb 2014 03:29:36 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 412)
+        self.assertEquals(body, '')
+
+    def test_same(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Unmodified-Since': 'Thu, 20 Feb 2014 03:29:37 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_greater(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Unmodified-Since': 'Thu, 20 Feb 2014 03:29:38 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_out_of_range_is_ignored(self):
+        # All that datetime gives us is a ValueError or OverflowError when
+        # something is out of range (i.e. less than datetime.datetime.min or
+        # greater than datetime.datetime.max). Unfortunately, we can't
+        # distinguish between a date being too old and a date being too new,
+        # so the best we can do is ignore such headers.
+        max_date_list = list(datetime.datetime.max.timetuple())
+        max_date_list[0] += 1  # bump up the year
+        too_big_date_header = time.strftime(
+            "%a, %d %b %Y %H:%M:%S GMT", time.struct_time(max_date_list))
+
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Unmodified-Since': too_big_date_header})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
 
 
 if __name__ == '__main__':

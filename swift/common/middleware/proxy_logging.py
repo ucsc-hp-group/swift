@@ -24,6 +24,7 @@ The logging format implemented below is as follows:
 client_ip remote_addr datetime request_method request_path protocol
     status_int referer user_agent auth_token bytes_recvd bytes_sent
     client_etag transaction_id headers request_time source log_info
+    request_start_time request_end_time
 
 These values are space-separated, and each is url-encoded, so that they can
 be separated with a simple .split()
@@ -76,8 +77,7 @@ from urllib import quote, unquote
 from swift.common.swob import Request
 from swift.common.utils import (get_logger, get_remote_client,
                                 get_valid_utf8_str, config_true_value,
-                                InputProxy)
-from swift.common.constraints import MAX_HEADER_SIZE
+                                InputProxy, list_from_csv, get_policy_index)
 
 QUOTE_SAFE = '/:'
 
@@ -92,6 +92,10 @@ class ProxyLoggingMiddleware(object):
         self.log_hdrs = config_true_value(conf.get(
             'access_log_headers',
             conf.get('log_headers', 'no')))
+        log_hdrs_only = list_from_csv(conf.get(
+            'access_log_headers_only', ''))
+        self.log_hdrs_only = [x.title() for x in log_hdrs_only]
+
         # The leading access_* check is in case someone assumes that
         # log_statsd_valid_http_methods behaves like the other log_statsd_*
         # settings.
@@ -113,17 +117,17 @@ class ProxyLoggingMiddleware(object):
         self.access_logger = logger or get_logger(access_log_conf,
                                                   log_route='proxy-access')
         self.access_logger.set_statsd_prefix('proxy-server')
-        self.reveal_sensitive_prefix = int(conf.get('reveal_sensitive_prefix',
-                                                    MAX_HEADER_SIZE))
+        self.reveal_sensitive_prefix = int(
+            conf.get('reveal_sensitive_prefix', 16))
 
     def method_from_req(self, req):
         return req.environ.get('swift.orig_req_method', req.method)
 
-    def req_already_logged(self, req):
-        return req.environ.get('swift.proxy_access_log_made')
+    def req_already_logged(self, env):
+        return env.get('swift.proxy_access_log_made')
 
-    def mark_req_logged(self, req):
-        req.environ['swift.proxy_access_log_made'] = True
+    def mark_req_logged(self, env):
+        env['swift.proxy_access_log_made'] = True
 
     def obscure_sensitive(self, value):
         if value and len(value) > self.reveal_sensitive_prefix:
@@ -131,7 +135,7 @@ class ProxyLoggingMiddleware(object):
         return value
 
     def log_request(self, req, status_int, bytes_received, bytes_sent,
-                    start_time, end_time):
+                    start_time, end_time, resp_headers=None):
         """
         Log a request.
 
@@ -141,23 +145,30 @@ class ProxyLoggingMiddleware(object):
         :param bytes_sent: bytes yielded to the WSGI server
         :param start_time: timestamp request started
         :param end_time: timestamp request completed
+        :param resp_headers: dict of the response headers
         """
-        if self.req_already_logged(req):
-            return
+        resp_headers = resp_headers or {}
         req_path = get_valid_utf8_str(req.path)
         the_request = quote(unquote(req_path), QUOTE_SAFE)
         if req.query_string:
             the_request = the_request + '?' + req.query_string
         logged_headers = None
         if self.log_hdrs:
-            logged_headers = '\n'.join('%s: %s' % (k, v)
-                                       for k, v in req.headers.items())
+            if self.log_hdrs_only:
+                logged_headers = '\n'.join('%s: %s' % (k, v)
+                                           for k, v in req.headers.items()
+                                           if k in self.log_hdrs_only)
+            else:
+                logged_headers = '\n'.join('%s: %s' % (k, v)
+                                           for k, v in req.headers.items())
+
         method = self.method_from_req(req)
         end_gmtime_str = time.strftime('%d/%b/%Y/%H/%M/%S',
                                        time.gmtime(end_time))
         duration_time_str = "%.4f" % (end_time - start_time)
         start_time_str = "%.9f" % start_time
         end_time_str = "%.9f" % end_time
+        policy_index = get_policy_index(req.headers, resp_headers)
         self.access_logger.info(' '.join(
             quote(str(x) if x else '-', QUOTE_SAFE)
             for x in (
@@ -180,10 +191,10 @@ class ProxyLoggingMiddleware(object):
                 req.environ.get('swift.source'),
                 ','.join(req.environ.get('swift.log_info') or ''),
                 start_time_str,
-                end_time_str
+                end_time_str,
+                policy_index
             )))
-        self.mark_req_logged(req)
-        # Log timing and bytes-transfered data to StatsD
+        # Log timing and bytes-transferred data to StatsD
         metric_name = self.statsd_metric_name(req, status_int, method)
         # Only log data for valid controllers (or SOS) to keep the metric count
         # down (egregious errors will get logged by the proxy server itself).
@@ -209,6 +220,11 @@ class ProxyLoggingMiddleware(object):
         return '.'.join((stat_type, stat_method, str(status_int)))
 
     def __call__(self, env, start_response):
+        if self.req_already_logged(env):
+            return self.app(env, start_response)
+
+        self.mark_req_logged(env)
+
         start_response_args = [None]
         input_proxy = InputProxy(env['wsgi.input'])
         env['wsgi.input'] = input_proxy
@@ -241,16 +257,17 @@ class ProxyLoggingMiddleware(object):
                     break
             else:
                 if not chunk:
-                    start_response_args[0][1].append(('content-length', '0'))
+                    start_response_args[0][1].append(('Content-Length', '0'))
                 elif isinstance(iterable, list):
                     start_response_args[0][1].append(
-                        ('content-length', str(sum(len(i) for i in iterable))))
+                        ('Content-Length', str(sum(len(i) for i in iterable))))
+            resp_headers = dict(start_response_args[0][1])
             start_response(*start_response_args[0])
             req = Request(env)
 
             # Log timing information for time-to-first-byte (GET requests only)
             method = self.method_from_req(req)
-            if method == 'GET' and not self.req_already_logged(req):
+            if method == 'GET':
                 status_int = status_int_for_logging()
                 metric_name = self.statsd_metric_name(req, status_int, method)
                 if metric_name:
@@ -271,7 +288,10 @@ class ProxyLoggingMiddleware(object):
                 status_int = status_int_for_logging(client_disconnect)
                 self.log_request(
                     req, status_int, input_proxy.bytes_received, bytes_sent,
-                    start_time, time.time())
+                    start_time, time.time(), resp_headers=resp_headers)
+                close_method = getattr(iterable, 'close', None)
+                if callable(close_method):
+                    close_method()
 
         try:
             iterable = self.app(env, my_start_response)

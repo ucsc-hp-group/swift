@@ -30,7 +30,8 @@ RUN_DIR = '/var/run/swift'
 
 # auth-server has been removed from ALL_SERVERS, start it explicitly
 ALL_SERVERS = ['account-auditor', 'account-server', 'container-auditor',
-               'container-replicator', 'container-server', 'container-sync',
+               'container-replicator', 'container-reconciler',
+               'container-server', 'container-sync',
                'container-updater', 'object-auditor', 'object-server',
                'object-expirer', 'object-replicator', 'object-updater',
                'proxy-server', 'account-replicator', 'account-reaper',
@@ -43,7 +44,7 @@ GRACEFUL_SHUTDOWN_SERVERS = MAIN_SERVERS + ['auth-server']
 START_ONCE_SERVERS = REST_SERVERS
 # These are servers that match a type (account-*, container-*, object-*) but
 # don't use that type-server.conf file and instead use their own.
-STANDALONE_SERVERS = ['object-expirer']
+STANDALONE_SERVERS = ['object-expirer', 'container-reconciler']
 
 KILL_WAIT = 15  # seconds to wait for servers to die (by default)
 WARNING_WAIT = 3  # seconds to wait after message that may just be a warning
@@ -138,7 +139,7 @@ class UnknownCommandError(Exception):
     pass
 
 
-class Manager():
+class Manager(object):
     """Main class for performing commands on groups of servers.
 
     :param servers: list of server names as strings
@@ -146,24 +147,28 @@ class Manager():
     """
 
     def __init__(self, servers, run_dir=RUN_DIR):
-        server_names = set()
+        self.server_names = set()
         for server in servers:
             if server == 'all':
-                server_names.update(ALL_SERVERS)
+                self.server_names.update(ALL_SERVERS)
             elif server == 'main':
-                server_names.update(MAIN_SERVERS)
+                self.server_names.update(MAIN_SERVERS)
             elif server == 'rest':
-                server_names.update(REST_SERVERS)
+                self.server_names.update(REST_SERVERS)
             elif '*' in server:
                 # convert glob to regex
-                server_names.update([s for s in ALL_SERVERS if
-                                     re.match(server.replace('*', '.*'), s)])
+                self.server_names.update([
+                    s for s in ALL_SERVERS if
+                    re.match(server.replace('*', '.*'), s)])
             else:
-                server_names.add(server)
+                self.server_names.add(server)
 
         self.servers = set()
-        for name in server_names:
+        for name in self.server_names:
             self.servers.add(Server(name, run_dir))
+
+    def __iter__(self):
+        return iter(self.servers)
 
     @command
     def status(self, **kwargs):
@@ -241,7 +246,7 @@ class Manager():
             print _("%s (%s) appears to have stopped") % (server, killed_pid)
             killed_pids.add(killed_pid)
             if not killed_pids.symmetric_difference(signaled_pids):
-                # all proccesses have been stopped
+                # all processes have been stopped
                 return 0
 
         # reached interval n watch_pids w/o killing all servers
@@ -251,6 +256,17 @@ class Manager():
                 print _('Waited %s seconds for %s to die; giving up') % (
                     kill_wait, server)
         return 1
+
+    @command
+    def kill(self, **kwargs):
+        """stop a server (no error if not running)
+        """
+        status = self.stop(**kwargs)
+        kwargs['quiet'] = True
+        if status and not self.status(**kwargs):
+            # only exit error if the server is still running
+            return status
+        return 0
 
     @command
     def shutdown(self, **kwargs):
@@ -276,8 +292,8 @@ class Manager():
         """
         kwargs['graceful'] = True
         status = 0
-        for server in self.servers:
-            m = Manager([server.server])
+        for server in self.server_names:
+            m = Manager([server])
             status += m.stop(**kwargs)
             status += m.start(**kwargs)
         return status
@@ -326,18 +342,22 @@ class Manager():
         return f(**kwargs)
 
 
-class Server():
+class Server(object):
     """Manage operations on a server or group of servers of similar type
 
     :param server: name of server
     """
 
     def __init__(self, server, run_dir=RUN_DIR):
-        if '-' not in server:
-            server = '%s-server' % server
         self.server = server.lower()
-        self.type = server.rsplit('-', 1)[0]
-        self.cmd = 'swift-%s' % server
+        if '.' in self.server:
+            self.server, self.conf = self.server.rsplit('.', 1)
+        else:
+            self.conf = None
+        if '-' not in self.server:
+            self.server = '%s-server' % self.server
+        self.type = self.server.rsplit('-', 1)[0]
+        self.cmd = 'swift-%s' % self.server
         self.procs = []
         self.run_dir = run_dir
 
@@ -395,10 +415,15 @@ class Server():
         :returns: list of conf files
         """
         if self.server in STANDALONE_SERVERS:
-            found_conf_files = search_tree(SWIFT_DIR, self.server + '*',
-                                           '.conf', dir_ext='.conf.d')
+            server_search = self.server
         else:
-            found_conf_files = search_tree(SWIFT_DIR, '%s-server*' % self.type,
+            server_search = "%s-server" % self.type
+        if self.conf is not None:
+            found_conf_files = search_tree(SWIFT_DIR, server_search,
+                                           self.conf + '.conf',
+                                           dir_ext=self.conf + '.conf.d')
+        else:
+            found_conf_files = search_tree(SWIFT_DIR, server_search + '*',
                                            '.conf', dir_ext='.conf.d')
         number = kwargs.get('number')
         if number:
@@ -411,8 +436,11 @@ class Server():
         if not conf_files:
             # maybe there's a config file(s) out there, but I couldn't find it!
             if not kwargs.get('quiet'):
-                print _('Unable to locate config %sfor %s') % (
-                    ('number %s ' % number if number else ''), self.server)
+                if number:
+                    print _('Unable to locate config number %s for %s' % (
+                        number, self.server))
+                else:
+                    print _('Unable to locate config for %s' % (self.server))
             if kwargs.get('verbose') and not kwargs.get('quiet'):
                 if found_conf_files:
                     print _('Found configs:')
@@ -428,7 +456,12 @@ class Server():
 
         :returns: list of pid files
         """
-        pid_files = search_tree(self.run_dir, '%s*' % self.server)
+        if self.conf is not None:
+            pid_files = search_tree(self.run_dir, '%s*' % self.server,
+                                    exts=[self.conf + '.pid',
+                                          self.conf + '.pid.d'])
+        else:
+            pid_files = search_tree(self.run_dir, '%s*' % self.server)
         if kwargs.get('number', 0):
             conf_files = self.conf_files(**kwargs)
             # filter pid_files to match the index of numbered conf_file
@@ -525,7 +558,7 @@ class Server():
         :param conf_file: path to conf_file to use as first arg
         :param once: boolean, add once argument to command
         :param wait: boolean, if true capture stdout with a pipe
-        :param daemon: boolean, if true ask server to log to console
+        :param daemon: boolean, if false ask server to log to console
 
         :returns : the pid of the spawned process
         """
@@ -562,6 +595,11 @@ class Server():
         for proc in self.procs:
             # wait for process to close its stdout
             output = proc.stdout.read()
+            if kwargs.get('once', False):
+                # if you don't want once to wait you can send it to the
+                # background on the command line, I generally just run with
+                # no-daemon anyway, but this is quieter
+                proc.wait()
             if output:
                 print output
                 start = time.time()
@@ -591,7 +629,7 @@ class Server():
         """
         conf_files = self.conf_files(**kwargs)
         if not conf_files:
-            return []
+            return {}
 
         pids = self.get_running_pids(**kwargs)
 
@@ -611,7 +649,7 @@ class Server():
 
         if already_started:
             print _("%s already started...") % self.server
-            return []
+            return {}
 
         if self.server not in START_ONCE_SERVERS:
             kwargs['once'] = False

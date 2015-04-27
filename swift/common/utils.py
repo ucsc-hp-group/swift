@@ -15,8 +15,11 @@
 
 """Miscellaneous utility functions for use with Swift."""
 
+from __future__ import print_function
+
 import errno
 import fcntl
+import grp
 import hmac
 import operator
 import os
@@ -27,6 +30,7 @@ import threading as stdlib_threading
 import time
 import uuid
 import functools
+import weakref
 from hashlib import md5, sha1
 from random import random, shuffle
 from urllib import quote as _quote
@@ -47,6 +51,7 @@ import glob
 from urlparse import urlparse as stdlib_urlparse, ParseResult
 import itertools
 import stat
+import datetime
 
 import eventlet
 import eventlet.semaphore
@@ -60,8 +65,10 @@ utf8_decoder = codecs.getdecoder('utf-8')
 utf8_encoder = codecs.getencoder('utf-8')
 
 from swift import gettext_ as _
-from swift.common.exceptions import LockTimeout, MessageTimeout
-from swift.common.http import is_success, is_redirection, HTTP_NOT_FOUND
+import swift.common.exceptions
+from swift.common.http import is_success, is_redirection, HTTP_NOT_FOUND, \
+    HTTP_PRECONDITION_FAILED, HTTP_REQUESTED_RANGE_NOT_SATISFIABLE
+
 
 # logging doesn't import patched as cleanly as one would like
 from logging.handlers import SysLogHandler
@@ -77,6 +84,9 @@ SysLogHandler.priority_map['NOTICE'] = 'notice'
 # These are lazily pulled from libc elsewhere
 _sys_fallocate = None
 _posix_fadvise = None
+_libc_socket = None
+_libc_bind = None
+_libc_accept = None
 
 # If set to non-zero, fallocate routines will fail based on free space
 # available being at or below this amount, in bytes.
@@ -85,20 +95,51 @@ FALLOCATE_RESERVE = 0
 # Used by hash_path to offer a bit more security when generating hashes for
 # paths. It simply appends this value to all paths; guessing the hash a path
 # will end up with would also require knowing this suffix.
-hash_conf = ConfigParser()
 HASH_PATH_SUFFIX = ''
 HASH_PATH_PREFIX = ''
-if hash_conf.read('/etc/swift/swift.conf'):
-    try:
-        HASH_PATH_SUFFIX = hash_conf.get('swift-hash',
-                                         'swift_hash_path_suffix')
-    except (NoSectionError, NoOptionError):
-        pass
-    try:
-        HASH_PATH_PREFIX = hash_conf.get('swift-hash',
-                                         'swift_hash_path_prefix')
-    except (NoSectionError, NoOptionError):
-        pass
+
+SWIFT_CONF_FILE = '/etc/swift/swift.conf'
+
+# These constants are Linux-specific, and Python doesn't seem to know
+# about them. We ask anyway just in case that ever gets fixed.
+#
+# The values were copied from the Linux 3.0 kernel headers.
+AF_ALG = getattr(socket, 'AF_ALG', 38)
+F_SETPIPE_SZ = getattr(fcntl, 'F_SETPIPE_SZ', 1031)
+
+
+class InvalidHashPathConfigError(ValueError):
+
+    def __str__(self):
+        return "[swift-hash]: both swift_hash_path_suffix and " \
+            "swift_hash_path_prefix are missing from %s" % SWIFT_CONF_FILE
+
+
+def validate_hash_conf():
+    global HASH_PATH_SUFFIX
+    global HASH_PATH_PREFIX
+    if not HASH_PATH_SUFFIX and not HASH_PATH_PREFIX:
+        hash_conf = ConfigParser()
+        if hash_conf.read(SWIFT_CONF_FILE):
+            try:
+                HASH_PATH_SUFFIX = hash_conf.get('swift-hash',
+                                                 'swift_hash_path_suffix')
+            except (NoSectionError, NoOptionError):
+                pass
+            try:
+                HASH_PATH_PREFIX = hash_conf.get('swift-hash',
+                                                 'swift_hash_path_prefix')
+            except (NoSectionError, NoOptionError):
+                pass
+        if not HASH_PATH_SUFFIX and not HASH_PATH_PREFIX:
+            raise InvalidHashPathConfigError()
+
+
+try:
+    validate_hash_conf()
+except InvalidHashPathConfigError:
+    # could get monkey patched or lazy loaded
+    pass
 
 
 def get_hmac(request_method, path, expires, key):
@@ -137,11 +178,19 @@ def get_swift_info(admin=False, disallowed_sections=None):
     :returns: dictionary of information about the swift cluster.
     """
     disallowed_sections = disallowed_sections or []
-    info = {}
-    for section in _swift_info:
-        if section in disallowed_sections:
-            continue
-        info[section] = dict(_swift_info[section].items())
+    info = dict(_swift_info)
+    for section in disallowed_sections:
+        key_to_pop = None
+        sub_section_dict = info
+        for sub_section in section.split('.'):
+            if key_to_pop:
+                sub_section_dict = sub_section_dict.get(key_to_pop, {})
+                if not isinstance(sub_section_dict, dict):
+                    sub_section_dict = {}
+                    break
+            key_to_pop = sub_section
+        sub_section_dict.pop(key_to_pop, None)
+
     if admin:
         info['admin'] = dict(_swift_admin_info)
         info['admin']['disallowed_sections'] = list(disallowed_sections)
@@ -153,12 +202,16 @@ def register_swift_info(name='swift', admin=False, **kwargs):
     Registers information about the swift cluster to be retrieved with calls
     to get_swift_info.
 
+    NOTE: Do not use "." in the param: name or any keys in kwargs. "." is used
+          in the disallowed_sections to remove unwanted keys from /info.
+
     :param name: string, the section name to place the information under.
     :param admin: boolean, if True, information will be registered to an
                   admin section which can optionally be withheld when
                   requesting the information.
     :param kwargs: key value arguments representing the information to be
                    added.
+    :raises ValueError: if name or any of the keys in kwargs has "." in it
     """
     if name == 'admin' or name == 'disallowed_sections':
         raise ValueError('\'{0}\' is reserved name.'.format(name))
@@ -168,8 +221,12 @@ def register_swift_info(name='swift', admin=False, **kwargs):
     else:
         dict_to_use = _swift_info
     if name not in dict_to_use:
+        if "." in name:
+            raise ValueError('Cannot use "." in a swift_info key: %s' % name)
         dict_to_use[name] = {}
     for key, val in kwargs.iteritems():
+        if "." in key:
+            raise ValueError('Cannot use "." in a swift_info key: %s' % key)
         dict_to_use[name][key] = val
 
 
@@ -229,9 +286,75 @@ def config_auto_int_value(value, default):
     try:
         value = int(value)
     except (TypeError, ValueError):
-        raise ValueError('Config option must be a integer or the '
+        raise ValueError('Config option must be an integer or the '
                          'string "auto", not "%s".' % value)
     return value
+
+
+def append_underscore(prefix):
+    if prefix and prefix[-1] != '_':
+        prefix += '_'
+    return prefix
+
+
+def config_read_reseller_options(conf, defaults):
+    """
+    Read reseller_prefix option and associated options from configuration
+
+    Reads the reseller_prefix option, then reads options that may be
+    associated with a specific reseller prefix. Reads options such that an
+    option without a prefix applies to all reseller prefixes unless an option
+    has an explicit prefix.
+
+    :param conf: the configuration
+    :param defaults: a dict of default values. The key is the option
+                     name. The value is either an array of strings or a string
+    :return: tuple of an array of reseller prefixes and a dict of option values
+    """
+    reseller_prefix_opt = conf.get('reseller_prefix', 'AUTH').split(',')
+    reseller_prefixes = []
+    for prefix in [pre.strip() for pre in reseller_prefix_opt if pre.strip()]:
+        if prefix == "''":
+            prefix = ''
+        prefix = append_underscore(prefix)
+        if prefix not in reseller_prefixes:
+            reseller_prefixes.append(prefix)
+    if len(reseller_prefixes) == 0:
+        reseller_prefixes.append('')
+
+    # Get prefix-using config options
+    associated_options = {}
+    for prefix in reseller_prefixes:
+        associated_options[prefix] = dict(defaults)
+        associated_options[prefix].update(
+            config_read_prefixed_options(conf, '', defaults))
+        prefix_name = prefix if prefix != '' else "''"
+        associated_options[prefix].update(
+            config_read_prefixed_options(conf, prefix_name, defaults))
+    return reseller_prefixes, associated_options
+
+
+def config_read_prefixed_options(conf, prefix_name, defaults):
+    """
+    Read prefixed options from configuration
+
+    :param conf: the configuration
+    :param prefix_name: the prefix (including, if needed, an underscore)
+    :param defaults: a dict of default values. The dict supplies the
+                     option name and type (string or comma separated string)
+    :return: a dict containing the options
+    """
+    params = {}
+    for option_name in defaults.keys():
+        value = conf.get('%s%s' % (prefix_name, option_name))
+        if value:
+            if isinstance(defaults.get(option_name), list):
+                params[option_name] = []
+                for role in value.lower().split(','):
+                    params[option_name].append(role.strip())
+            else:
+                params[option_name] = value.strip()
+    return params
 
 
 def noop_libc_function(*args):
@@ -239,22 +362,28 @@ def noop_libc_function(*args):
 
 
 def validate_configuration():
-    if not HASH_PATH_SUFFIX and not HASH_PATH_PREFIX:
-        sys.exit("Error: [swift-hash]: both swift_hash_path_suffix "
-                 "and swift_hash_path_prefix are missing "
-                 "from /etc/swift/swift.conf")
+    try:
+        validate_hash_conf()
+    except InvalidHashPathConfigError as e:
+        sys.exit("Error: %s" % e)
 
 
-def load_libc_function(func_name, log_error=True):
+def load_libc_function(func_name, log_error=True,
+                       fail_if_missing=False):
     """
     Attempt to find the function in libc, otherwise return a no-op func.
 
     :param func_name: name of the function to pull from libc.
+    :param log_error: log an error when a function can't be found
+    :param fail_if_missing: raise an exception when a function can't be found.
+                            Default behavior is to return a no-op function.
     """
     try:
         libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
         return getattr(libc, func_name)
     except AttributeError:
+        if fail_if_missing:
+            raise
         if log_error:
             logging.warn(_("Unable to locate %s in libc.  Leaving as a "
                          "no-op."), func_name)
@@ -263,7 +392,46 @@ def load_libc_function(func_name, log_error=True):
 
 def generate_trans_id(trans_id_suffix):
     return 'tx%s-%010x%s' % (
-        uuid.uuid4().hex[:21], time.time(), trans_id_suffix)
+        uuid.uuid4().hex[:21], time.time(), quote(trans_id_suffix))
+
+
+def get_policy_index(req_headers, res_headers):
+    """
+    Returns the appropriate index of the storage policy for the request from
+    a proxy server
+
+    :param req: dict of the request headers.
+    :param res: dict of the response headers.
+
+    :returns: string index of storage policy, or None
+    """
+    header = 'X-Backend-Storage-Policy-Index'
+    policy_index = res_headers.get(header, req_headers.get(header))
+    return str(policy_index) if policy_index is not None else None
+
+
+def get_log_line(req, res, trans_time, additional_info):
+    """
+    Make a line for logging that matches the documented log line format
+    for backend servers.
+
+    :param req: the request.
+    :param res: the response.
+    :param trans_time: the time the request took to complete, a float.
+    :param additional_info: a string to log at the end of the line
+
+    :returns: a properly formated line for logging.
+    """
+
+    policy_index = get_policy_index(req.headers, res.headers)
+    return '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %.4f "%s" %d %s' % (
+        req.remote_addr,
+        time.strftime('%d/%b/%Y:%H:%M:%S +0000', time.gmtime()),
+        req.method, req.path, res.status.split()[0],
+        res.content_length or '-', req.referer or '-',
+        req.headers.get('x-trans-id', '-'),
+        req.user_agent or '-', trans_time, additional_info or '-',
+        os.getpid(), policy_index or '-')
 
 
 def get_trans_id_time(trans_id):
@@ -477,6 +645,27 @@ def fdatasync(fd):
         fsync(fd)
 
 
+def fsync_dir(dirpath):
+    """
+    Sync directory entries to disk.
+
+    :param dirpath: Path to the directory to be synced.
+    """
+    dirfd = None
+    try:
+        dirfd = os.open(dirpath, os.O_DIRECTORY | os.O_RDONLY)
+        fsync(dirfd)
+    except OSError as err:
+        if err.errno == errno.ENOTDIR:
+            # Raise error if someone calls fsync_dir on a non-directory
+            raise
+        logging.warn(_("Unable to perform fsync() on directory %s: %s"),
+                     dirpath, os.strerror(err.errno))
+    finally:
+        if dirfd:
+            os.close(dirfd)
+
+
 def drop_buffer_cache(fd, offset, length):
     """
     Drop 'buffer' cache for the given range of the given file.
@@ -492,8 +681,126 @@ def drop_buffer_cache(fd, offset, length):
     ret = _posix_fadvise(fd, ctypes.c_uint64(offset),
                          ctypes.c_uint64(length), 4)
     if ret != 0:
-        logging.warn("posix_fadvise64(%s, %s, %s, 4) -> %s"
-                     % (fd, offset, length, ret))
+        logging.warn("posix_fadvise64(%(fd)s, %(offset)s, %(length)s, 4) "
+                     "-> %(ret)s", {'fd': fd, 'offset': offset,
+                                    'length': length, 'ret': ret})
+
+
+NORMAL_FORMAT = "%016.05f"
+INTERNAL_FORMAT = NORMAL_FORMAT + '_%016x'
+MAX_OFFSET = (16 ** 16) - 1
+# Setting this to True will cause the internal format to always display
+# extended digits - even when the value is equivalent to the normalized form.
+# This isn't ideal during an upgrade when some servers might not understand
+# the new time format - but flipping it to True works great for testing.
+FORCE_INTERNAL = False  # or True
+
+
+class Timestamp(object):
+    """
+    Internal Representation of Swift Time.
+
+    The normalized form of the X-Timestamp header looks like a float
+    with a fixed width to ensure stable string sorting - normalized
+    timestamps look like "1402464677.04188"
+
+    To support overwrites of existing data without modifying the original
+    timestamp but still maintain consistency a second internal offset vector
+    is append to the normalized timestamp form which compares and sorts
+    greater than the fixed width float format but less than a newer timestamp.
+    The internalized format of timestamps looks like
+    "1402464677.04188_0000000000000000" - the portion after the underscore is
+    the offset and is a formatted hexadecimal integer.
+
+    The internalized form is not exposed to clients in responses from
+    Swift.  Normal client operations will not create a timestamp with an
+    offset.
+
+    The Timestamp class in common.utils supports internalized and
+    normalized formatting of timestamps and also comparison of timestamp
+    values.  When the offset value of a Timestamp is 0 - it's considered
+    insignificant and need not be represented in the string format; to
+    support backwards compatibility during a Swift upgrade the
+    internalized and normalized form of a Timestamp with an
+    insignificant offset are identical.  When a timestamp includes an
+    offset it will always be represented in the internalized form, but
+    is still excluded from the normalized form.  Timestamps with an
+    equivalent timestamp portion (the float part) will compare and order
+    by their offset.  Timestamps with a greater timestamp portion will
+    always compare and order greater than a Timestamp with a lesser
+    timestamp regardless of it's offset.  String comparison and ordering
+    is guaranteed for the internalized string format, and is backwards
+    compatible for normalized timestamps which do not include an offset.
+    """
+
+    def __init__(self, timestamp, offset=0):
+        if isinstance(timestamp, basestring):
+            parts = timestamp.split('_', 1)
+            self.timestamp = float(parts.pop(0))
+            if parts:
+                self.offset = int(parts[0], 16)
+            else:
+                self.offset = 0
+        else:
+            self.timestamp = float(timestamp)
+            self.offset = getattr(timestamp, 'offset', 0)
+        # increment offset
+        if offset >= 0:
+            self.offset += offset
+        else:
+            raise ValueError('offset must be non-negative')
+        if self.offset > MAX_OFFSET:
+            raise ValueError('offset must be smaller than %d' % MAX_OFFSET)
+
+    def __repr__(self):
+        return INTERNAL_FORMAT % (self.timestamp, self.offset)
+
+    def __str__(self):
+        raise TypeError('You must specify which string format is required')
+
+    def __float__(self):
+        return self.timestamp
+
+    def __int__(self):
+        return int(self.timestamp)
+
+    def __nonzero__(self):
+        return bool(self.timestamp or self.offset)
+
+    @property
+    def normal(self):
+        return NORMAL_FORMAT % self.timestamp
+
+    @property
+    def internal(self):
+        if self.offset or FORCE_INTERNAL:
+            return INTERNAL_FORMAT % (self.timestamp, self.offset)
+        else:
+            return self.normal
+
+    @property
+    def isoformat(self):
+        isoformat = datetime.datetime.utcfromtimestamp(
+            float(self.normal)).isoformat()
+        # python isoformat() doesn't include msecs when zero
+        if len(isoformat) < len("1970-01-01T00:00:00.000000"):
+            isoformat += ".000000"
+        return isoformat
+
+    def __eq__(self, other):
+        if not isinstance(other, Timestamp):
+            other = Timestamp(other)
+        return self.internal == other.internal
+
+    def __ne__(self, other):
+        if not isinstance(other, Timestamp):
+            other = Timestamp(other)
+        return self.internal != other.internal
+
+    def __cmp__(self, other):
+        if not isinstance(other, Timestamp):
+            other = Timestamp(other)
+        return cmp(self.internal, other.internal)
 
 
 def normalize_timestamp(timestamp):
@@ -508,7 +815,51 @@ def normalize_timestamp(timestamp):
     :param timestamp: unix timestamp
     :returns: normalized timestamp as a string
     """
-    return "%016.05f" % (float(timestamp))
+    return Timestamp(timestamp).normal
+
+
+EPOCH = datetime.datetime(1970, 1, 1)
+
+
+def last_modified_date_to_timestamp(last_modified_date_str):
+    """
+    Convert a last modified date (like you'd get from a container listing,
+    e.g. 2014-02-28T23:22:36.698390) to a float.
+    """
+    start = datetime.datetime.strptime(last_modified_date_str,
+                                       '%Y-%m-%dT%H:%M:%S.%f')
+    delta = start - EPOCH
+    # TODO(sam): after we no longer support py2.6, this expression can
+    # simplify to Timestamp(delta.total_seconds()).
+    #
+    # This calculation is based on Python 2.7's Modules/datetimemodule.c,
+    # function delta_to_microseconds(), but written in Python.
+    return Timestamp(delta.days * 86400 +
+                     delta.seconds +
+                     delta.microseconds / 1000000.0)
+
+
+def normalize_delete_at_timestamp(timestamp):
+    """
+    Format a timestamp (string or numeric) into a standardized
+    xxxxxxxxxx (10) format.
+
+    Note that timestamps less than 0000000000 are raised to
+    0000000000 and values greater than November 20th, 2286 at
+    17:46:39 UTC will be capped at that date and time, resulting in
+    no return value exceeding 9999999999.
+
+    This cap is because the expirer is already working through a
+    sorted list of strings that were all a length of 10. Adding
+    another digit would mess up the sort and cause the expirer to
+    break from processing early. By 2286, this problem will need to
+    be fixed, probably by creating an additional .expiring_objects
+    account to work from with 11 (or more) digit container names.
+
+    :param timestamp: unix timestamp
+    :returns: normalized timestamp as a string
+    """
+    return '%010d' % min(max(0, float(timestamp)), 9999999999)
 
 
 def mkdirs(path):
@@ -526,20 +877,66 @@ def mkdirs(path):
                 raise
 
 
-def renamer(old, new):
+def makedirs_count(path, count=0):
+    """
+    Same as os.makedirs() except that this method returns the number of
+    new directories that had to be created.
+
+    Also, this does not raise an error if target directory already exists.
+    This behaviour is similar to Python 3.x's os.makedirs() called with
+    exist_ok=True. Also similar to swift.common.utils.mkdirs()
+
+    https://hg.python.org/cpython/file/v3.4.2/Lib/os.py#l212
+    """
+    head, tail = os.path.split(path)
+    if not tail:
+        head, tail = os.path.split(head)
+    if head and tail and not os.path.exists(head):
+        count = makedirs_count(head, count)
+        if tail == os.path.curdir:
+            return
+    try:
+        os.mkdir(path)
+    except OSError as e:
+        # EEXIST may also be raised if path exists as a file
+        # Do not let that pass.
+        if e.errno != errno.EEXIST or not os.path.isdir(path):
+            raise
+    else:
+        count += 1
+    return count
+
+
+def renamer(old, new, fsync=True):
     """
     Attempt to fix / hide race conditions like empty object directories
     being removed by backend processes during uploads, by retrying.
 
+    The containing directory of 'new' and of all newly created directories are
+    fsync'd by default. This _will_ come at a performance penalty. In cases
+    where these additional fsyncs are not necessary, it is expected that the
+    caller of renamer() turn it off explicitly.
+
     :param old: old path to be renamed
     :param new: new path to be renamed to
+    :param fsync: fsync on containing directory of new and also all
+                  the newly created directories.
     """
+    dirpath = os.path.dirname(new)
     try:
-        mkdirs(os.path.dirname(new))
+        count = makedirs_count(dirpath)
         os.rename(old, new)
     except OSError:
-        mkdirs(os.path.dirname(new))
+        count = makedirs_count(dirpath)
         os.rename(old, new)
+    if fsync:
+        # If count=0, no new directories were created. But we still need to
+        # fsync leaf dir after os.rename().
+        # If count>0, starting from leaf dir, fsync parent dirs of all
+        # directories created by makedirs_count()
+        for i in range(0, count + 1):
+            fsync_dir(dirpath)
+            dirpath = os.path.dirname(dirpath)
 
 
 def split_path(path, minsegs=1, maxsegs=None, rest_with_last=False):
@@ -559,7 +956,7 @@ def split_path(path, minsegs=1, maxsegs=None, rest_with_last=False):
     :param rest_with_last: If True, trailing data will be returned as part
                            of last segment.  If False, and there is
                            trailing data, raises ValueError.
-    :returns: list of segments with a length of maxsegs (non-existant
+    :returns: list of segments with a length of maxsegs (non-existent
               segments will return as None)
     :raises: ValueError if given an invalid path
     """
@@ -598,17 +995,38 @@ def validate_device_partition(device, partition):
     :param partition: partition to validate
     :raises: ValueError if given an invalid device or partition
     """
-    invalid_device = False
-    invalid_partition = False
     if not device or '/' in device or device in ['.', '..']:
-        invalid_device = True
-    if not partition or '/' in partition or partition in ['.', '..']:
-        invalid_partition = True
-
-    if invalid_device:
         raise ValueError('Invalid device: %s' % quote(device or ''))
-    elif invalid_partition:
+    if not partition or '/' in partition or partition in ['.', '..']:
         raise ValueError('Invalid partition: %s' % quote(partition or ''))
+
+
+class RateLimitedIterator(object):
+    """
+    Wrap an iterator to only yield elements at a rate of N per second.
+
+    :param iterable: iterable to wrap
+    :param elements_per_second: the rate at which to yield elements
+    :param limit_after: rate limiting kicks in only after yielding
+                        this many elements; default is 0 (rate limit
+                        immediately)
+    """
+    def __init__(self, iterable, elements_per_second, limit_after=0):
+        self.iterator = iter(iterable)
+        self.elements_per_second = elements_per_second
+        self.limit_after = limit_after
+        self.running_time = 0
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        if self.limit_after > 0:
+            self.limit_after -= 1
+        else:
+            self.running_time = ratelimit_sleep(self.running_time,
+                                                self.elements_per_second)
+        return self.iterator.next()
 
 
 class GreenthreadSafeIterator(object):
@@ -634,29 +1052,31 @@ class GreenthreadSafeIterator(object):
             return self.unsafe_iter.next()
 
 
-class NullLogger():
+class NullLogger(object):
     """A no-op logger for eventlet wsgi."""
 
     def write(self, *args):
-        #"Logs" the args to nowhere
+        # "Logs" the args to nowhere
         pass
 
 
 class LoggerFileObject(object):
 
-    def __init__(self, logger):
+    def __init__(self, logger, log_type='STDOUT'):
         self.logger = logger
+        self.log_type = log_type
 
     def write(self, value):
         value = value.strip()
         if value:
             if 'Connection reset by peer' in value:
-                self.logger.error(_('STDOUT: Connection reset by peer'))
+                self.logger.error(
+                    _('%s: Connection reset by peer'), self.log_type)
             else:
-                self.logger.error(_('STDOUT: %s'), value)
+                self.logger.error(_('%s: %s'), self.log_type, value)
 
     def writelines(self, values):
-        self.logger.error(_('STDOUT: %s'), '#012'.join(values))
+        self.logger.error(_('%s: %s'), self.log_type, '#012'.join(values))
 
     def close(self):
         pass
@@ -685,7 +1105,7 @@ class LoggerFileObject(object):
 
 class StatsdClient(object):
     def __init__(self, host, port, base_prefix='', tail_prefix='',
-                 default_sample_rate=1, sample_rate_factor=1):
+                 default_sample_rate=1, sample_rate_factor=1, logger=None):
         self._host = host
         self._port = port
         self._base_prefix = base_prefix
@@ -694,6 +1114,7 @@ class StatsdClient(object):
         self._sample_rate_factor = sample_rate_factor
         self._target = (self._host, self._port)
         self.random = random
+        self.logger = logger
 
     def set_prefix(self, new_prefix):
         if new_prefix and self._base_prefix:
@@ -718,7 +1139,13 @@ class StatsdClient(object):
         # Ideally, we'd cache a sending socket in self, but that
         # results in a socket getting shared by multiple green threads.
         with closing(self._open_socket()) as sock:
-            return sock.sendto('|'.join(parts), self._target)
+            try:
+                return sock.sendto('|'.join(parts), self._target)
+            except IOError as err:
+                if self.logger:
+                    self.logger.warn(
+                        'Error sending UDP message to %r: %s',
+                        self._target, err)
 
     def _open_socket(self):
         return socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -746,6 +1173,24 @@ class StatsdClient(object):
                                sample_rate)
 
 
+def server_handled_successfully(status_int):
+    """
+    True for successful responses *or* error codes that are not Swift's fault,
+    False otherwise. For example, 500 is definitely the server's fault, but
+    412 is an error code (4xx are all errors) that is due to a header the
+    client sent.
+
+    If one is tracking error rates to monitor server health, one would be
+    advised to use a function like this one, lest a client cause a flurry of
+    404s or 416s and make a spurious spike in your errors graph.
+    """
+    return (is_success(status_int) or
+            is_redirection(status_int) or
+            status_int == HTTP_NOT_FOUND or
+            status_int == HTTP_PRECONDITION_FAILED or
+            status_int == HTTP_REQUESTED_RANGE_NOT_SATISFIABLE)
+
+
 def timing_stats(**dec_kwargs):
     """
     Returns a decorator that logs timing events or errors for public methods in
@@ -758,9 +1203,7 @@ def timing_stats(**dec_kwargs):
         def _timing_stats(ctrl, *args, **kwargs):
             start_time = time.time()
             resp = func(ctrl, *args, **kwargs)
-            if is_success(resp.status_int) or \
-                    is_redirection(resp.status_int) or \
-                    resp.status_int == HTTP_NOT_FOUND:
+            if server_handled_successfully(resp.status_int):
                 ctrl.logger.timing_since(method + '.timing',
                                          start_time, **dec_kwargs)
             else:
@@ -770,6 +1213,27 @@ def timing_stats(**dec_kwargs):
 
         return _timing_stats
     return decorating_func
+
+
+class LoggingHandlerWeakRef(weakref.ref):
+    """
+    Like a weak reference, but passes through a couple methods that logging
+    handlers need.
+    """
+
+    def close(self):
+        referent = self()
+        try:
+            if referent:
+                referent.close()
+        except KeyError:
+            # This is to catch an issue with old py2.6 versions
+            pass
+
+    def flush(self):
+        referent = self()
+        if referent:
+            referent.flush()
 
 
 # double inheritance to support property with setter
@@ -858,7 +1322,7 @@ class LogAdapter(logging.LoggerAdapter, object):
             emsg = exc.__class__.__name__
             if hasattr(exc, 'seconds'):
                 emsg += ' (%ss)' % exc.seconds
-            if isinstance(exc, MessageTimeout):
+            if isinstance(exc, swift.common.exceptions.MessageTimeout):
                 if exc.msg:
                     emsg += ' %s' % exc.msg
         else:
@@ -904,9 +1368,14 @@ class LogAdapter(logging.LoggerAdapter, object):
 
 class SwiftLogFormatter(logging.Formatter):
     """
-    Custom logging.Formatter will append txn_id to a log message if the record
-    has one and the message does not.
+    Custom logging.Formatter will append txn_id to a log message if the
+    record has one and the message does not. Optionally it can shorten
+    overly long log lines.
     """
+
+    def __init__(self, fmt=None, datefmt=None, max_line_length=0):
+        logging.Formatter.__init__(self, fmt=fmt, datefmt=datefmt)
+        self.max_line_length = max_line_length
 
     def format(self, record):
         if not hasattr(record, 'server'):
@@ -939,6 +1408,12 @@ class SwiftLogFormatter(logging.Formatter):
                 record.levelno != logging.INFO and
                 record.client_ip not in msg):
             msg = "%s (client_ip: %s)" % (msg, record.client_ip)
+        if self.max_line_length > 0 and len(msg) > self.max_line_length:
+            if self.max_line_length < 7:
+                msg = msg[:self.max_line_length]
+            else:
+                approxhalf = (self.max_line_length - 5) / 2
+                msg = msg[:approxhalf] + " ... " + msg[-approxhalf:]
         return msg
 
 
@@ -952,6 +1427,7 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
         log_facility = LOG_LOCAL0
         log_level = INFO
         log_name = swift
+        log_max_line_length = 0
         log_udp_host = (disabled)
         log_udp_port = logging.handlers.SYSLOG_UDP_PORT
         log_address = /dev/log
@@ -977,7 +1453,8 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
     logger = logging.getLogger(log_route)
     logger.propagate = False
     # all new handlers will get the same formatter
-    formatter = SwiftLogFormatter(fmt)
+    formatter = SwiftLogFormatter(
+        fmt=fmt, max_line_length=int(conf.get('log_max_line_length', 0)))
 
     # get_logger will only ever add one SysLog Handler to a logger
     if not hasattr(get_logger, 'handler4logger'):
@@ -1035,7 +1512,7 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
             'log_statsd_sample_rate_factor', 1))
         statsd_client = StatsdClient(statsd_host, statsd_port, base_prefix,
                                      name, default_sample_rate,
-                                     sample_rate_factor)
+                                     sample_rate_factor, logger=logger)
         logger.statsd_client = statsd_client
     else:
         logger.statsd_client = None
@@ -1052,9 +1529,37 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
                 logger_hook(conf, name, log_to_console, log_route, fmt,
                             logger, adapted_logger)
             except (AttributeError, ImportError):
-                print >>sys.stderr, 'Error calling custom handler [%s]' % hook
+                print('Error calling custom handler [%s]' % hook,
+                      file=sys.stderr)
             except ValueError:
-                print >>sys.stderr, 'Invalid custom handler format [%s]' % hook
+                print('Invalid custom handler format [%s]' % hook,
+                      file=sys.stderr)
+
+    # Python 2.6 has the undesirable property of keeping references to all log
+    # handlers around forever in logging._handlers and logging._handlerList.
+    # Combine that with handlers that keep file descriptors, and you get an fd
+    # leak.
+    #
+    # And no, we can't share handlers; a SyslogHandler has a socket, and if
+    # two greenthreads end up logging at the same time, you could get message
+    # overlap that garbles the logs and makes eventlet complain.
+    #
+    # Python 2.7 uses weakrefs to avoid the leak, so let's do that too.
+    if sys.version_info[0] == 2 and sys.version_info[1] <= 6:
+        try:
+            logging._acquireLock()  # some thread-safety thing
+            for handler in adapted_logger.logger.handlers:
+                if handler in logging._handlers:
+                    wr = LoggingHandlerWeakRef(handler)
+                    del logging._handlers[handler]
+                    logging._handlers[wr] = 1
+                for i, handler_ref in enumerate(logging._handlerList):
+                    if handler_ref is handler:
+                        logging._handlerList[i] = LoggingHandlerWeakRef(
+                            handler)
+        finally:
+            logging._releaseLock()
+
     return adapted_logger
 
 
@@ -1089,9 +1594,10 @@ def drop_privileges(user):
 
     :param user: User name to change privileges to
     """
-    user = pwd.getpwnam(user)
     if os.geteuid() == 0:
-        os.setgroups([])
+        groups = [g.gr_gid for g in grp.getgrall() if user in g.gr_mem]
+        os.setgroups(groups)
+    user = pwd.getpwnam(user)
     os.setgid(user[3])
     os.setuid(user[2])
     os.environ['HOME'] = user[5]
@@ -1137,7 +1643,7 @@ def capture_stdio(logger, **kwargs):
     if kwargs.pop('capture_stdout', True):
         sys.stdout = LoggerFileObject(logger)
     if kwargs.pop('capture_stderr', True):
-        sys.stderr = LoggerFileObject(logger)
+        sys.stderr = LoggerFileObject(logger, 'STDERR')
 
 
 def parse_options(parser=None, once=False, test_args=None):
@@ -1166,12 +1672,12 @@ def parse_options(parser=None, once=False, test_args=None):
 
     if not args:
         parser.print_usage()
-        print _("Error: missing config path argument")
+        print(_("Error: missing config path argument"))
         sys.exit(1)
     config = os.path.abspath(args.pop(0))
     if not os.path.exists(config):
         parser.print_usage()
-        print _("Error: unable to locate %s") % config
+        print(_("Error: unable to locate %s") % config)
         sys.exit(1)
 
     extra_args = []
@@ -1186,6 +1692,17 @@ def parse_options(parser=None, once=False, test_args=None):
     if extra_args:
         options['extra_args'] = extra_args
     return config, options
+
+
+def expand_ipv6(address):
+    """
+    Expand ipv6 address.
+    :param address: a string indicating valid ipv6 address
+    :returns: a string indicating fully expanded ipv6 address
+
+    """
+    packed_ip = socket.inet_pton(socket.AF_INET6, address)
+    return socket.inet_ntop(socket.AF_INET6, packed_ip)
 
 
 def whataremyips():
@@ -1207,7 +1724,7 @@ def whataremyips():
                     # If we have an ipv6 address remove the
                     # %ether_interface at the end
                     if family == netifaces.AF_INET6:
-                        addr = addr.split('%')[0]
+                        addr = expand_ipv6(addr.split('%')[0])
                     addresses.append(addr)
         except ValueError:
             pass
@@ -1252,7 +1769,7 @@ def hash_path(account, container=None, object=None, raw_digest=False):
 
 
 @contextmanager
-def lock_path(directory, timeout=10, timeout_class=LockTimeout):
+def lock_path(directory, timeout=10, timeout_class=None):
     """
     Context manager that acquires a lock on a directory.  This will block until
     the lock can be acquired, or the timeout time has expired (whichever occurs
@@ -1269,9 +1786,15 @@ def lock_path(directory, timeout=10, timeout_class=LockTimeout):
         constructed as timeout_class(timeout, lockpath). Default:
         LockTimeout
     """
+    if timeout_class is None:
+        timeout_class = swift.common.exceptions.LockTimeout
     mkdirs(directory)
     lockpath = '%s/.lock' % directory
     fd = os.open(lockpath, os.O_WRONLY | os.O_CREAT)
+    sleep_time = 0.01
+    slower_sleep_time = max(timeout * 0.01, sleep_time)
+    slowdown_at = timeout * 0.01
+    time_slept = 0
     try:
         with timeout_class(timeout, lockpath):
             while True:
@@ -1281,7 +1804,10 @@ def lock_path(directory, timeout=10, timeout_class=LockTimeout):
                 except IOError as err:
                     if err.errno != errno.EAGAIN:
                         raise
-                sleep(0.01)
+                if time_slept > slowdown_at:
+                    sleep_time = slower_sleep_time
+                sleep(sleep_time)
+                time_slept += sleep_time
         yield True
     finally:
         os.close(fd)
@@ -1305,26 +1831,32 @@ def lock_file(filename, timeout=10, append=False, unlink=True):
         mode = 'a+'
     else:
         mode = 'r+'
-    fd = os.open(filename, flags)
-    file_obj = os.fdopen(fd, mode)
-    try:
-        with LockTimeout(timeout, filename):
-            while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except IOError as err:
-                    if err.errno != errno.EAGAIN:
-                        raise
-                sleep(0.01)
-        yield file_obj
-    finally:
+    while True:
+        fd = os.open(filename, flags)
+        file_obj = os.fdopen(fd, mode)
         try:
+            with swift.common.exceptions.LockTimeout(timeout, filename):
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except IOError as err:
+                        if err.errno != errno.EAGAIN:
+                            raise
+                    sleep(0.01)
+            try:
+                if os.stat(filename).st_ino != os.fstat(fd).st_ino:
+                    continue
+            except OSError as err:
+                if err.errno == errno.ENOENT:
+                    continue
+                raise
+            yield file_obj
+            if unlink:
+                os.unlink(filename)
+            break
+        finally:
             file_obj.close()
-        except UnboundLocalError:
-            pass  # may have not actually opened the file
-        if unlink:
-            os.unlink(filename)
 
 
 def lock_parent_directory(filename, timeout=10):
@@ -1389,7 +1921,7 @@ def unlink_older_than(path, mtime):
             pass
 
 
-def item_from_env(env, item_name):
+def item_from_env(env, item_name, allow_none=False):
     """
     Get a value from the wsgi environment
 
@@ -1399,12 +1931,12 @@ def item_from_env(env, item_name):
     :returns: the value from the environment
     """
     item = env.get(item_name, None)
-    if item is None:
-        logging.error("ERROR: %s could not be found in env!" % item_name)
+    if item is None and not allow_none:
+        logging.error("ERROR: %s could not be found in env!", item_name)
     return item
 
 
-def cache_from_env(env):
+def cache_from_env(env, allow_none=False):
     """
     Get memcache connection pool from the environment (which had been
     previously set by the memcache middleware
@@ -1413,7 +1945,7 @@ def cache_from_env(env):
 
     :returns: swift.common.memcached.MemcacheRing from environment
     """
-    return item_from_env(env, 'swift.cache')
+    return item_from_env(env, 'swift.cache', allow_none)
 
 
 def read_conf_dir(parser, conf_dir):
@@ -1453,14 +1985,14 @@ def readconf(conf_path, section_name=None, log_name=None, defaults=None,
         else:
             success = c.read(conf_path)
         if not success:
-            print _("Unable to read config from %s") % conf_path
+            print(_("Unable to read config from %s") % conf_path)
             sys.exit(1)
     if section_name:
         if c.has_section(section_name):
             conf = dict(c.items(section_name))
         else:
-            print _("Unable to find %s config section in %s") % \
-                (section_name, conf_path)
+            print(_("Unable to find %s config section in %s") %
+                  (section_name, conf_path))
             sys.exit(1)
         if "log_name" not in conf:
             if log_name is not None:
@@ -1498,7 +2030,7 @@ def write_pickle(obj, dest, tmp=None, pickle_protocol=0):
         renamer(tmppath, dest)
 
 
-def search_tree(root, glob_match, ext='', dir_ext=None):
+def search_tree(root, glob_match, ext='', exts=None, dir_ext=None):
     """Look in root, for any files/dirs matching glob, recursively traversing
     any found directories looking for files ending with ext
 
@@ -1512,6 +2044,7 @@ def search_tree(root, glob_match, ext='', dir_ext=None):
     :returns: list of full paths to matching files, sorted
 
     """
+    exts = exts or [ext]
     found_files = []
     for path in glob.glob(os.path.join(root, glob_match)):
         if os.path.isdir(path):
@@ -1521,7 +2054,7 @@ def search_tree(root, glob_match, ext='', dir_ext=None):
                     # the root is a config dir, descend no further
                     break
                 for file_ in files:
-                    if ext and not file_.endswith(ext):
+                    if any(exts) and not any(file_.endswith(e) for e in exts):
                         continue
                     found_files.append(os.path.join(root, file_))
                 found_dir = False
@@ -1590,11 +2123,16 @@ def audit_location_generator(devices, datadir, suffix='',
     for device in device_dir:
         if mount_check and not ismount(os.path.join(devices, device)):
             if logger:
-                logger.debug(
+                logger.warning(
                     _('Skipping %s as it is not mounted'), device)
             continue
         datadir_path = os.path.join(devices, device, datadir)
-        partitions = listdir(datadir_path)
+        try:
+            partitions = listdir(datadir_path)
+        except OSError as e:
+            if logger:
+                logger.warning('Skipping %s because %s', datadir_path, e)
+            continue
         for partition in partitions:
             part_path = os.path.join(datadir_path, partition)
             try:
@@ -1634,26 +2172,41 @@ def ratelimit_sleep(running_time, max_rate, incr_by=1, rate_buffer=5):
     as eventlet.sleep() does involve some overhead.  Returns running_time
     that should be used for subsequent calls.
 
-    :param running_time: the running time of the next allowable request. Best
-                         to start at zero.
+    :param running_time: the running time in milliseconds of the next
+                         allowable request. Best to start at zero.
     :param max_rate: The maximum rate per second allowed for the process.
     :param incr_by: How much to increment the counter.  Useful if you want
                     to ratelimit 1024 bytes/sec and have differing sizes
-                    of requests. Must be >= 0.
+                    of requests. Must be > 0 to engage rate-limiting
+                    behavior.
     :param rate_buffer: Number of seconds the rate counter can drop and be
                         allowed to catch up (at a faster than listed rate).
                         A larger number will result in larger spikes in rate
-                        but better average accuracy.
+                        but better average accuracy. Must be > 0 to engage
+                        rate-limiting behavior.
     '''
-    if not max_rate or incr_by <= 0:
+    if max_rate <= 0 or incr_by <= 0:
         return running_time
+
+    # 1,000 milliseconds = 1 second
     clock_accuracy = 1000.0
+
+    # Convert seconds to milliseconds
     now = time.time() * clock_accuracy
+
+    # Calculate time per request in milliseconds
     time_per_request = clock_accuracy * (float(incr_by) / max_rate)
+
+    # Convert rate_buffer to milliseconds and compare
     if now - running_time > rate_buffer * clock_accuracy:
         running_time = now
     elif running_time - now > time_per_request:
+        # Convert diff back to a floating point number of seconds and sleep
         eventlet.sleep((running_time - now) / clock_accuracy)
+
+    # Return the absolute time for the next interval in milliseconds; note
+    # that time could have passed well beyond that point, but the next call
+    # will catch that and skip the sleep.
     return running_time + time_per_request
 
 
@@ -1683,11 +2236,16 @@ class GreenAsyncPile(object):
 
     Correlating results with jobs (if necessary) is left to the caller.
     """
-    def __init__(self, size):
+    def __init__(self, size_or_pool):
         """
-        :param size: size pool of green threads to use
+        :param size_or_pool: thread pool size or a pool to use
         """
-        self._pool = GreenPool(size)
+        if isinstance(size_or_pool, GreenPool):
+            self._pool = size_or_pool
+            size = self._pool.size
+        else:
+            self._pool = GreenPool(size_or_pool)
+            size = size_or_pool
         self._responses = eventlet.queue.LightQueue(size)
         self._inflight = 0
 
@@ -1765,21 +2323,66 @@ def urlparse(url):
     return ModifiedParseResult(*stdlib_urlparse(url))
 
 
-def validate_sync_to(value, allowed_sync_hosts):
+def validate_sync_to(value, allowed_sync_hosts, realms_conf):
+    """
+    Validates an X-Container-Sync-To header value, returning the
+    validated endpoint, realm, and realm_key, or an error string.
+
+    :param value: The X-Container-Sync-To header value to validate.
+    :param allowed_sync_hosts: A list of allowed hosts in endpoints,
+        if realms_conf does not apply.
+    :param realms_conf: A instance of
+        swift.common.container_sync_realms.ContainerSyncRealms to
+        validate against.
+    :returns: A tuple of (error_string, validated_endpoint, realm,
+        realm_key). The error_string will None if the rest of the
+        values have been validated. The validated_endpoint will be
+        the validated endpoint to sync to. The realm and realm_key
+        will be set if validation was done through realms_conf.
+    """
+    orig_value = value
+    value = value.rstrip('/')
     if not value:
-        return None
+        return (None, None, None, None)
+    if value.startswith('//'):
+        if not realms_conf:
+            return (None, None, None, None)
+        data = value[2:].split('/')
+        if len(data) != 4:
+            return (
+                _('Invalid X-Container-Sync-To format %r') % orig_value,
+                None, None, None)
+        realm, cluster, account, container = data
+        realm_key = realms_conf.key(realm)
+        if not realm_key:
+            return (_('No realm key for %r') % realm, None, None, None)
+        endpoint = realms_conf.endpoint(realm, cluster)
+        if not endpoint:
+            return (
+                _('No cluster endpoint for %r %r') % (realm, cluster),
+                None, None, None)
+        return (
+            None,
+            '%s/%s/%s' % (endpoint.rstrip('/'), account, container),
+            realm.upper(), realm_key)
     p = urlparse(value)
     if p.scheme not in ('http', 'https'):
-        return _('Invalid scheme %r in X-Container-Sync-To, must be "http" '
-                 'or "https".') % p.scheme
+        return (
+            _('Invalid scheme %r in X-Container-Sync-To, must be "//", '
+              '"http", or "https".') % p.scheme,
+            None, None, None)
     if not p.path:
-        return _('Path required in X-Container-Sync-To')
+        return (_('Path required in X-Container-Sync-To'), None, None, None)
     if p.params or p.query or p.fragment:
-        return _('Params, queries, and fragments not allowed in '
-                 'X-Container-Sync-To')
+        return (
+            _('Params, queries, and fragments not allowed in '
+              'X-Container-Sync-To'),
+            None, None, None)
     if p.hostname not in allowed_sync_hosts:
-        return _('Invalid host %r in X-Container-Sync-To') % p.hostname
-    return None
+        return (
+            _('Invalid host %r in X-Container-Sync-To') % p.hostname,
+            None, None, None)
+    return (None, value, None, None)
 
 
 def affinity_key_function(affinity_str):
@@ -1796,8 +2399,7 @@ def affinity_key_function(affinity_str):
     priority values are what comes after the equals sign.
 
     If affinity_str is empty or all whitespace, then the resulting function
-    will not alter the ordering of the nodes. However, if affinity_str
-    contains an invalid value, then None is returned.
+    will not alter the ordering of the nodes.
 
     :param affinity_str: affinity config value, e.g. "r1z2=3"
                          or "r1=1, r2z1=2, r2z2=2"
@@ -1915,6 +2517,29 @@ def human_readable(value):
     return '%d%si' % (round(value), suffixes[index])
 
 
+def put_recon_cache_entry(cache_entry, key, item):
+    """
+    Function that will check if item is a dict, and if so put it under
+    cache_entry[key].  We use nested recon cache entries when the object
+    auditor runs in parallel or else in 'once' mode with a specified
+    subset of devices.
+    """
+    if isinstance(item, dict):
+        if key not in cache_entry or key in cache_entry and not \
+                isinstance(cache_entry[key], dict):
+            cache_entry[key] = {}
+        elif key in cache_entry and item == {}:
+            cache_entry.pop(key, None)
+            return
+        for k, v in item.items():
+            if v == {}:
+                cache_entry[key].pop(k, None)
+            else:
+                cache_entry[key][k] = v
+    else:
+        cache_entry[key] = item
+
+
 def dump_recon_cache(cache_dict, cache_file, logger, lock_timeout=2):
     """Update recon cache values
 
@@ -1931,15 +2556,15 @@ def dump_recon_cache(cache_dict, cache_file, logger, lock_timeout=2):
                 if existing_entry:
                     cache_entry = json.loads(existing_entry)
             except ValueError:
-                #file doesn't have a valid entry, we'll recreate it
+                # file doesn't have a valid entry, we'll recreate it
                 pass
             for cache_key, cache_value in cache_dict.items():
-                cache_entry[cache_key] = cache_value
+                put_recon_cache_entry(cache_entry, cache_key, cache_value)
             try:
                 with NamedTemporaryFile(dir=os.path.dirname(cache_file),
                                         delete=False) as tf:
                     tf.write(json.dumps(cache_entry) + '\n')
-                os.rename(tf.name, cache_file)
+                renamer(tf.name, cache_file, fsync=False)
             finally:
                 try:
                     os.unlink(tf.name)
@@ -1979,6 +2604,17 @@ def streq_const_time(s1, s2):
     return result == 0
 
 
+def pairs(item_list):
+    """
+    Returns an iterator of all pairs of elements from item_list.
+
+    :param items: items (no duplicates allowed)
+    """
+    for i, item1 in enumerate(item_list):
+        for item2 in item_list[(i + 1):]:
+            yield (item1, item2)
+
+
 def replication(func):
     """
     Decorator to declare which methods are accessible for different
@@ -2015,6 +2651,10 @@ def public(func):
 
 def quorum_size(n):
     """
+    quorum size as it applies to services that use 'replication' for data
+    integrity  (Account/Container services).  Object quorum_size is defined
+    on a storage policy basis.
+
     Number of successful backend requests needed for the proxy to consider
     the client request successful.
     """
@@ -2153,6 +2793,93 @@ class InputProxy(object):
         return line
 
 
+class LRUCache(object):
+    """
+    Decorator for size/time bound memoization that evicts the least
+    recently used members.
+    """
+
+    PREV, NEXT, KEY, CACHED_AT, VALUE = 0, 1, 2, 3, 4  # link fields
+
+    def __init__(self, maxsize=1000, maxtime=3600):
+        self.maxsize = maxsize
+        self.maxtime = maxtime
+        self.reset()
+
+    def reset(self):
+        self.mapping = {}
+        self.head = [None, None, None, None, None]  # oldest
+        self.tail = [self.head, None, None, None, None]  # newest
+        self.head[self.NEXT] = self.tail
+
+    def set_cache(self, value, *key):
+        while len(self.mapping) >= self.maxsize:
+            old_next, old_key = self.head[self.NEXT][self.NEXT:self.NEXT + 2]
+            self.head[self.NEXT], old_next[self.PREV] = old_next, self.head
+            del self.mapping[old_key]
+        last = self.tail[self.PREV]
+        link = [last, self.tail, key, time.time(), value]
+        self.mapping[key] = last[self.NEXT] = self.tail[self.PREV] = link
+        return value
+
+    def get_cached(self, link, *key):
+        link_prev, link_next, key, cached_at, value = link
+        if cached_at + self.maxtime < time.time():
+            raise KeyError('%r has timed out' % (key,))
+        link_prev[self.NEXT] = link_next
+        link_next[self.PREV] = link_prev
+        last = self.tail[self.PREV]
+        last[self.NEXT] = self.tail[self.PREV] = link
+        link[self.PREV] = last
+        link[self.NEXT] = self.tail
+        return value
+
+    def __call__(self, f):
+
+        class LRUCacheWrapped(object):
+
+            @functools.wraps(f)
+            def __call__(im_self, *key):
+                link = self.mapping.get(key, self.head)
+                if link is not self.head:
+                    try:
+                        return self.get_cached(link, *key)
+                    except KeyError:
+                        pass
+                value = f(*key)
+                self.set_cache(value, *key)
+                return value
+
+            def size(im_self):
+                """
+                Return the size of the cache
+                """
+                return len(self.mapping)
+
+            def reset(im_self):
+                return self.reset()
+
+            def get_maxsize(im_self):
+                return self.maxsize
+
+            def set_maxsize(im_self, i):
+                self.maxsize = i
+
+            def get_maxtime(im_self):
+                return self.maxtime
+
+            def set_maxtime(im_self, i):
+                self.maxtime = i
+
+            maxsize = property(get_maxsize, set_maxsize)
+            maxtime = property(get_maxtime, set_maxtime)
+
+            def __repr__(im_self):
+                return '<%s %r>' % (im_self.__class__.__name__, f)
+
+        return LRUCacheWrapped()
+
+
 def tpool_reraise(func, *args, **kwargs):
     """
     Hack to work around Eventlet's tpool not catching and reraising Timeouts.
@@ -2169,19 +2896,21 @@ def tpool_reraise(func, *args, **kwargs):
 
 
 class ThreadPool(object):
-    BYTE = 'a'.encode('utf-8')
-
     """
     Perform blocking operations in background threads.
 
     Call its methods from within greenlets to green-wait for results without
     blocking the eventlet reactor (hopefully).
     """
+
+    BYTE = 'a'.encode('utf-8')
+
     def __init__(self, nthreads=2):
         self.nthreads = nthreads
         self._run_queue = Queue()
         self._result_queue = Queue()
         self._threads = []
+        self._alive = True
 
         if nthreads <= 0:
             return
@@ -2229,6 +2958,8 @@ class ThreadPool(object):
         """
         while True:
             item = work_queue.get()
+            if item is None:
+                break
             ev, func, args, kwargs = item
             try:
                 result = func(*args, **kwargs)
@@ -2283,6 +3014,9 @@ class ThreadPool(object):
         :returns: result of calling func
         :raises: whatever func raises
         """
+        if not self._alive:
+            raise swift.common.exceptions.ThreadPoolDead()
+
         if self.nthreads <= 0:
             result = func(*args, **kwargs)
             sleep()
@@ -2327,15 +3061,56 @@ class ThreadPool(object):
         :returns: result of calling func
         :raises: whatever func raises
         """
+        if not self._alive:
+            raise swift.common.exceptions.ThreadPoolDead()
+
         if self.nthreads <= 0:
             return self._run_in_eventlet_tpool(func, *args, **kwargs)
         else:
             return self.run_in_thread(func, *args, **kwargs)
 
+    def terminate(self):
+        """
+        Releases the threadpool's resources (OS threads, greenthreads, pipes,
+        etc.) and renders it unusable.
+
+        Don't call run_in_thread() or force_run_in_thread() after calling
+        terminate().
+        """
+        self._alive = False
+        if self.nthreads <= 0:
+            return
+
+        for _junk in range(self.nthreads):
+            self._run_queue.put(None)
+        for thr in self._threads:
+            thr.join()
+        self._threads = []
+        self.nthreads = 0
+
+        greenthread.kill(self._consumer_coro)
+
+        self.rpipe.close()
+        os.close(self.wpipe)
+
 
 def ismount(path):
     """
-    Test whether a path is a mount point.
+    Test whether a path is a mount point. This will catch any
+    exceptions and translate them into a False return value
+    Use ismount_raw to have the exceptions raised instead.
+    """
+    try:
+        return ismount_raw(path)
+    except OSError:
+        return False
+
+
+def ismount_raw(path):
+    """
+    Test whether a path is a mount point. Whereas ismount will catch
+    any exceptions and just return False, this raw version will not
+    catch exceptions.
 
     This is code hijacked from C Python 2.6.8, adapted to remove the extra
     lstat() system call.
@@ -2372,6 +3147,26 @@ _rfc_token = r'[^()<>@,;:\"/\[\]?={}\x00-\x20\x7f]+'
 _rfc_extension_pattern = re.compile(
     r'(?:\s*;\s*(' + _rfc_token + r")\s*(?:=\s*(" + _rfc_token +
     r'|"(?:[^"\\]|\\.)*"))?)')
+
+_content_range_pattern = re.compile(r'^bytes (\d+)-(\d+)/(\d+)$')
+
+
+def parse_content_range(content_range):
+    """
+    Parse a content-range header into (first_byte, last_byte, total_size).
+
+    See RFC 7233 section 4.2 for details on the header format, but it's
+    basically "Content-Range: bytes ${start}-${end}/${total}".
+
+    :param content_range: Content-Range header value to parse,
+        e.g. "bytes 100-1249/49004"
+    :returns: 3-tuple (start, end, total)
+    :raises: ValueError if malformed
+    """
+    found = re.search(_content_range_pattern, content_range)
+    if not found:
+        raise ValueError("malformed Content-Range %r" % (content_range,))
+    return tuple(int(x) for x in found.groups())
 
 
 def parse_content_type(content_type):
@@ -2417,8 +3212,236 @@ def override_bytes_from_content_type(listing_dict, logger=None):
     listing_dict['content_type'] = content_type
 
 
+def clean_content_type(value):
+    if ';' in value:
+        left, right = value.rsplit(';', 1)
+        if right.lstrip().startswith('swift_bytes='):
+            return left
+    return value
+
+
 def quote(value, safe='/'):
     """
     Patched version of urllib.quote that encodes utf-8 strings before quoting
     """
     return _quote(get_valid_utf8_str(value), safe)
+
+
+def get_expirer_container(x_delete_at, expirer_divisor, acc, cont, obj):
+    """
+    Returns a expiring object container name for given X-Delete-At and
+    a/c/o.
+    """
+    shard_int = int(hash_path(acc, cont, obj), 16) % 100
+    return normalize_delete_at_timestamp(
+        int(x_delete_at) / expirer_divisor * expirer_divisor - shard_int)
+
+
+class _MultipartMimeFileLikeObject(object):
+
+    def __init__(self, wsgi_input, boundary, input_buffer, read_chunk_size):
+        self.no_more_data_for_this_file = False
+        self.no_more_files = False
+        self.wsgi_input = wsgi_input
+        self.boundary = boundary
+        self.input_buffer = input_buffer
+        self.read_chunk_size = read_chunk_size
+
+    def read(self, length=None):
+        if not length:
+            length = self.read_chunk_size
+        if self.no_more_data_for_this_file:
+            return ''
+
+        # read enough data to know whether we're going to run
+        # into a boundary in next [length] bytes
+        if len(self.input_buffer) < length + len(self.boundary) + 2:
+            to_read = length + len(self.boundary) + 2
+            while to_read > 0:
+                chunk = self.wsgi_input.read(to_read)
+                to_read -= len(chunk)
+                self.input_buffer += chunk
+                if not chunk:
+                    self.no_more_files = True
+                    break
+
+        boundary_pos = self.input_buffer.find(self.boundary)
+
+        # boundary does not exist in the next (length) bytes
+        if boundary_pos == -1 or boundary_pos > length:
+            ret = self.input_buffer[:length]
+            self.input_buffer = self.input_buffer[length:]
+        # if it does, just return data up to the boundary
+        else:
+            ret, self.input_buffer = self.input_buffer.split(self.boundary, 1)
+            self.no_more_files = self.input_buffer.startswith('--')
+            self.no_more_data_for_this_file = True
+            self.input_buffer = self.input_buffer[2:]
+        return ret
+
+    def readline(self):
+        if self.no_more_data_for_this_file:
+            return ''
+        boundary_pos = newline_pos = -1
+        while newline_pos < 0 and boundary_pos < 0:
+            chunk = self.wsgi_input.read(self.read_chunk_size)
+            self.input_buffer += chunk
+            newline_pos = self.input_buffer.find('\r\n')
+            boundary_pos = self.input_buffer.find(self.boundary)
+            if not chunk:
+                self.no_more_files = True
+                break
+        # found a newline
+        if newline_pos >= 0 and \
+                (boundary_pos < 0 or newline_pos < boundary_pos):
+            # Use self.read to ensure any logic there happens...
+            ret = ''
+            to_read = newline_pos + 2
+            while to_read > 0:
+                chunk = self.read(to_read)
+                # Should never happen since we're reading from input_buffer,
+                # but just for completeness...
+                if not chunk:
+                    break
+                to_read -= len(chunk)
+                ret += chunk
+            return ret
+        else:  # no newlines, just return up to next boundary
+            return self.read(len(self.input_buffer))
+
+
+def iter_multipart_mime_documents(wsgi_input, boundary, read_chunk_size=4096):
+    """
+    Given a multi-part-mime-encoded input file object and boundary,
+    yield file-like objects for each part.
+
+    :param wsgi_input: The file-like object to read from.
+    :param boundary: The mime boundary to separate new file-like
+                     objects on.
+    :returns: A generator of file-like objects for each part.
+    :raises: MimeInvalid if the document is malformed
+    """
+    boundary = '--' + boundary
+    blen = len(boundary) + 2  # \r\n
+    got = wsgi_input.readline(blen)
+    if got.strip() != boundary:
+        raise swift.common.exceptions.MimeInvalid(
+            'invalid starting boundary: wanted %r, got %r', (boundary, got))
+    boundary = '\r\n' + boundary
+    input_buffer = ''
+    done = False
+    while not done:
+        it = _MultipartMimeFileLikeObject(wsgi_input, boundary, input_buffer,
+                                          read_chunk_size)
+        yield it
+        done = it.no_more_files
+        input_buffer = it.input_buffer
+
+
+#: Regular expression to match form attributes.
+ATTRIBUTES_RE = re.compile(r'(\w+)=(".*?"|[^";]+)(; ?|$)')
+
+
+def parse_content_disposition(header):
+    """
+    Given the value of a header like:
+    Content-Disposition: form-data; name="somefile"; filename="test.html"
+
+    Return data like
+    ("form-data", {"name": "somefile", "filename": "test.html"})
+
+    :param header: Value of a header (the part after the ': ').
+    :returns: (value name, dict) of the attribute data parsed (see above).
+    """
+    attributes = {}
+    attrs = ''
+    if '; ' in header:
+        header, attrs = header.split('; ', 1)
+    m = True
+    while m:
+        m = ATTRIBUTES_RE.match(attrs)
+        if m:
+            attrs = attrs[len(m.group(0)):]
+            attributes[m.group(1)] = m.group(2).strip('"')
+    return header, attributes
+
+
+class sockaddr_alg(ctypes.Structure):
+    _fields_ = [("salg_family", ctypes.c_ushort),
+                ("salg_type", ctypes.c_ubyte * 14),
+                ("salg_feat", ctypes.c_uint),
+                ("salg_mask", ctypes.c_uint),
+                ("salg_name", ctypes.c_ubyte * 64)]
+
+
+_bound_md5_sockfd = None
+
+
+def get_md5_socket():
+    """
+    Get an MD5 socket file descriptor. One can MD5 data with it by writing it
+    to the socket with os.write, then os.read the 16 bytes of the checksum out
+    later.
+
+    NOTE: It is the caller's responsibility to ensure that os.close() is
+    called on the returned file descriptor. This is a bare file descriptor,
+    not a Python object. It doesn't close itself.
+    """
+
+    # Linux's AF_ALG sockets work like this:
+    #
+    # First, initialize a socket with socket() and bind(). This tells the
+    # socket what algorithm to use, as well as setting up any necessary bits
+    # like crypto keys. Of course, MD5 doesn't need any keys, so it's just the
+    # algorithm name.
+    #
+    # Second, to hash some data, get a second socket by calling accept() on
+    # the first socket. Write data to the socket, then when finished, read the
+    # checksum from the socket and close it. This lets you checksum multiple
+    # things without repeating all the setup code each time.
+    #
+    # Since we only need to bind() one socket, we do that here and save it for
+    # future re-use. That way, we only use one file descriptor to get an MD5
+    # socket instead of two, and we also get to save some syscalls.
+
+    global _bound_md5_sockfd
+    global _libc_socket
+    global _libc_bind
+    global _libc_accept
+
+    if _libc_accept is None:
+        _libc_accept = load_libc_function('accept', fail_if_missing=True)
+    if _libc_socket is None:
+        _libc_socket = load_libc_function('socket', fail_if_missing=True)
+    if _libc_bind is None:
+        _libc_bind = load_libc_function('bind', fail_if_missing=True)
+
+    # Do this at first call rather than at import time so that we don't use a
+    # file descriptor on systems that aren't using any MD5 sockets.
+    if _bound_md5_sockfd is None:
+        sockaddr_setup = sockaddr_alg(
+            AF_ALG,
+            (ord('h'), ord('a'), ord('s'), ord('h'), 0),
+            0, 0,
+            (ord('m'), ord('d'), ord('5'), 0))
+        hash_sockfd = _libc_socket(ctypes.c_int(AF_ALG),
+                                   ctypes.c_int(socket.SOCK_SEQPACKET),
+                                   ctypes.c_int(0))
+        if hash_sockfd < 0:
+            raise IOError(ctypes.get_errno(),
+                          "Failed to initialize MD5 socket")
+
+        bind_result = _libc_bind(ctypes.c_int(hash_sockfd),
+                                 ctypes.pointer(sockaddr_setup),
+                                 ctypes.c_int(ctypes.sizeof(sockaddr_alg)))
+        if bind_result < 0:
+            os.close(hash_sockfd)
+            raise IOError(ctypes.get_errno(), "Failed to bind MD5 socket")
+
+        _bound_md5_sockfd = hash_sockfd
+
+    md5_sockfd = _libc_accept(ctypes.c_int(_bound_md5_sockfd), None, 0)
+    if md5_sockfd < 0:
+        raise IOError(ctypes.get_errno(), "Failed to accept MD5 socket")
+
+    return md5_sockfd

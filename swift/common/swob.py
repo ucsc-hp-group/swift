@@ -36,7 +36,7 @@ needs to change.
 """
 
 from collections import defaultdict
-from cStringIO import StringIO
+from StringIO import StringIO
 import UserDict
 import time
 from functools import partial
@@ -49,7 +49,8 @@ import random
 import functools
 import inspect
 
-from swift.common.utils import reiterate, split_path
+from swift.common.utils import reiterate, split_path, Timestamp, pairs
+from swift.common.exceptions import InvalidTimestamp
 
 
 RESPONSE_REASONS = {
@@ -109,6 +110,10 @@ RESPONSE_REASONS = {
           'resource. Drive: %(drive)s'),
 }
 
+MAX_RANGE_OVERLAPS = 2
+MAX_NONASCENDING_RANGES = 8
+MAX_RANGES = 50
+
 
 class _UTC(tzinfo):
     """
@@ -121,6 +126,20 @@ class _UTC(tzinfo):
     def tzname(self, dt):
         return 'UTC'
 UTC = _UTC()
+
+
+class WsgiStringIO(StringIO):
+    """
+    This class adds support for the additional wsgi.input methods defined on
+    eventlet.wsgi.Input to the StringIO class which would otherwise be a fine
+    stand-in for the file-like object in the WSGI environment.
+    """
+
+    def set_hundred_continue_response_headers(self, headers):
+        pass
+
+    def send_hundred_continue_response(self):
+        pass
 
 
 def _datetime_property(header):
@@ -138,12 +157,9 @@ def _datetime_property(header):
         if value is not None:
             try:
                 parts = parsedate(self.headers[header])[:7]
-                date = datetime(*(parts + (UTC,)))
+                return datetime(*(parts + (UTC,)))
             except Exception:
                 return None
-            if date.year < 1970:
-                raise ValueError('Somehow an invalid year')
-            return date
 
     def setter(self, value):
         if isinstance(value, (float, int, long)):
@@ -287,6 +303,9 @@ class HeaderKeyDict(dict):
         if key not in self:
             self[key] = value
         return self[key]
+
+    def pop(self, key, default=None):
+        return dict.pop(self, key.title(), default)
 
 
 def _resp_status_property():
@@ -583,12 +602,49 @@ class Range(object):
                 # the total length of the content
                 all_ranges.append((begin, min(end + 1, length)))
 
+        # RFC 7233 section 6.1 ("Denial-of-Service Attacks Using Range") says:
+        #
+        # Unconstrained multiple range requests are susceptible to denial-of-
+        # service attacks because the effort required to request many
+        # overlapping ranges of the same data is tiny compared to the time,
+        # memory, and bandwidth consumed by attempting to serve the requested
+        # data in many parts.  Servers ought to ignore, coalesce, or reject
+        # egregious range requests, such as requests for more than two
+        # overlapping ranges or for many small ranges in a single set,
+        # particularly when the ranges are requested out of order for no
+        # apparent reason.  Multipart range requests are not designed to
+        # support random access.
+        #
+        # We're defining "egregious" here as:
+        #
+        # * more than 100 requested ranges OR
+        # * more than 2 overlapping ranges OR
+        # * more than 8 non-ascending-order ranges
+        if len(all_ranges) > MAX_RANGES:
+            return []
+
+        overlaps = 0
+        for ((start1, end1), (start2, end2)) in pairs(all_ranges):
+            if ((start1 < start2 < end1) or (start1 < end2 < end1) or
+               (start2 < start1 < end2) or (start2 < end1 < end2)):
+                overlaps += 1
+                if overlaps > MAX_RANGE_OVERLAPS:
+                    return []
+
+        ascending = True
+        for start1, start2 in zip(all_ranges, all_ranges[1:]):
+            if start1 > start2:
+                ascending = False
+                break
+        if not ascending and len(all_ranges) >= MAX_NONASCENDING_RANGES:
+            return []
+
         return all_ranges
 
 
 class Match(object):
     """
-    Wraps a Request's If-None-Match header as a friendly object.
+    Wraps a Request's If-[None-]Match header as a friendly object.
 
     :param headerval: value of the header as a str
     """
@@ -701,16 +757,16 @@ def _req_environ_property(environ_field):
 def _req_body_property():
     """
     Set and retrieve the Request.body parameter.  It consumes wsgi.input and
-    returns the results.  On assignment, uses a StringIO to create a new
+    returns the results.  On assignment, uses a WsgiStringIO to create a new
     wsgi.input.
     """
     def getter(self):
         body = self.environ['wsgi.input'].read()
-        self.environ['wsgi.input'] = StringIO(body)
+        self.environ['wsgi.input'] = WsgiStringIO(body)
         return body
 
     def setter(self, value):
-        self.environ['wsgi.input'] = StringIO(value)
+        self.environ['wsgi.input'] = WsgiStringIO(value)
         self.environ['CONTENT_LENGTH'] = str(len(value))
 
     return property(getter, setter, doc="Get and set the request body str")
@@ -754,7 +810,7 @@ class Request(object):
     remote_user = _req_environ_property('REMOTE_USER')
     user_agent = _req_environ_property('HTTP_USER_AGENT')
     query_string = _req_environ_property('QUERY_STRING')
-    if_match = _req_environ_property('HTTP_IF_MATCH')
+    if_match = _req_fancy_property(Match, 'if-match')
     body_file = _req_environ_property('wsgi.input')
     content_length = _header_int_property('content-length')
     if_modified_since = _datetime_property('if-modified-since')
@@ -762,6 +818,7 @@ class Request(object):
     body = _req_body_property()
     charset = None
     _params_cache = None
+    _timestamp = None
     acl = _req_environ_property('swob.ACL')
 
     def __init__(self, environ):
@@ -777,7 +834,7 @@ class Request(object):
         :param path: encoded, parsed, and unquoted into PATH_INFO
         :param environ: WSGI environ dictionary
         :param headers: HTTP headers
-        :param body: stuffed in a StringIO and hung on wsgi.input
+        :param body: stuffed in a WsgiStringIO and hung on wsgi.input
         :param kwargs: any environ key with an property setter
         """
         headers = headers or {}
@@ -812,10 +869,10 @@ class Request(object):
         }
         env.update(environ)
         if body is not None:
-            env['wsgi.input'] = StringIO(body)
+            env['wsgi.input'] = WsgiStringIO(body)
             env['CONTENT_LENGTH'] = str(len(body))
         elif 'wsgi.input' not in env:
-            env['wsgi.input'] = StringIO('')
+            env['wsgi.input'] = WsgiStringIO('')
         req = Request(env)
         for key, val in headers.iteritems():
             req.headers[key] = val
@@ -844,6 +901,22 @@ class Request(object):
     str_params = params
 
     @property
+    def timestamp(self):
+        """
+        Provides HTTP_X_TIMESTAMP as a :class:`~swift.common.utils.Timestamp`
+        """
+        if self._timestamp is None:
+            try:
+                raw_timestamp = self.environ['HTTP_X_TIMESTAMP']
+            except KeyError:
+                raise InvalidTimestamp('Missing X-Timestamp header')
+            try:
+                self._timestamp = Timestamp(raw_timestamp)
+            except ValueError:
+                raise InvalidTimestamp('Invalid X-Timestamp header')
+        return self._timestamp
+
+    @property
     def path_qs(self):
         """The path of the request, without host but with query string."""
         path = self.path
@@ -868,6 +941,10 @@ class Request(object):
         _ver, entity_path = self.split_path(1, 2, rest_with_last=True)
         if entity_path is not None:
             return '/' + entity_path
+
+    @property
+    def is_chunked(self):
+        return 'chunked' in self.headers.get('transfer-encoding', '')
 
     @property
     def url(self):
@@ -902,7 +979,7 @@ class Request(object):
         env.update({
             'REQUEST_METHOD': 'GET',
             'CONTENT_LENGTH': '0',
-            'wsgi.input': StringIO(''),
+            'wsgi.input': WsgiStringIO(''),
         })
         return Request(env)
 
@@ -953,7 +1030,7 @@ class Request(object):
         :param rest_with_last: If True, trailing data will be returned as part
                                of last segment.  If False, and there is
                                trailing data, raises ValueError.
-        :returns: list of segments with a length of maxsegs (non-existant
+        :returns: list of segments with a length of maxsegs (non-existent
                   segments will return as None)
         :raises: ValueError if given an invalid path
         """
@@ -1039,10 +1116,12 @@ class Response(object):
     app_iter = _resp_app_iter_property()
 
     def __init__(self, body=None, status=200, headers=None, app_iter=None,
-                 request=None, conditional_response=False, **kw):
+                 request=None, conditional_response=False,
+                 conditional_etag=None, **kw):
         self.headers = HeaderKeyDict(
             [('Content-Type', 'text/html; charset=UTF-8')])
         self.conditional_response = conditional_response
+        self._conditional_etag = conditional_etag
         self.request = request
         self.body = body
         self.app_iter = app_iter
@@ -1053,6 +1132,10 @@ class Response(object):
         else:
             self.environ = {}
         if headers:
+            if self._body and 'Content-Length' in headers:
+                # If body is not empty, prioritize actual body length over
+                # content_length in headers
+                del headers['Content-Length']
             self.headers.update(headers)
         if self.status_int == 401 and 'www-authenticate' not in self.headers:
             self.headers.update({'www-authenticate': self.www_authenticate()})
@@ -1063,6 +1146,26 @@ class Response(object):
         # can get wiped out when content_type sorts later in dict order.
         if 'charset' in kw and 'content_type' in kw:
             self.charset = kw['charset']
+
+    @property
+    def conditional_etag(self):
+        """
+        The conditional_etag keyword argument for Response will allow the
+        conditional match value of a If-Match request to be compared to a
+        non-standard value.
+
+        This is available for Storage Policies that do not store the client
+        object data verbatim on the storage nodes, but still need support
+        conditional requests.
+
+        It's most effectively used with X-Backend-Etag-Is-At which would
+        define the additional Metadata key where the original ETag of the
+        clear-form client request data.
+        """
+        if self._conditional_etag is not None:
+            return self._conditional_etag
+        else:
+            return self.etag
 
     def _prepare_for_ranges(self, ranges):
         """
@@ -1094,9 +1197,46 @@ class Response(object):
         return content_size, content_type
 
     def _response_iter(self, app_iter, body):
+        etag = self.conditional_etag
+        if self.conditional_response and self.request:
+            if etag and self.request.if_none_match and \
+                    etag in self.request.if_none_match:
+                self.status = 304
+                self.content_length = 0
+                return ['']
+
+            if etag and self.request.if_match and \
+               etag not in self.request.if_match:
+                self.status = 412
+                self.content_length = 0
+                return ['']
+
+            if self.status_int == 404 and self.request.if_match \
+               and '*' in self.request.if_match:
+                # If none of the entity tags match, or if "*" is given and no
+                # current entity exists, the server MUST NOT perform the
+                # requested method, and MUST return a 412 (Precondition
+                # Failed) response. [RFC 2616 section 14.24]
+                self.status = 412
+                self.content_length = 0
+                return ['']
+
+            if self.last_modified and self.request.if_modified_since \
+               and self.last_modified <= self.request.if_modified_since:
+                self.status = 304
+                self.content_length = 0
+                return ['']
+
+            if self.last_modified and self.request.if_unmodified_since \
+               and self.last_modified > self.request.if_unmodified_since:
+                self.status = 412
+                self.content_length = 0
+                return ['']
+
         if self.request and self.request.method == 'HEAD':
             # We explicitly do NOT want to set self.content_length to 0 here
             return ['']
+
         if self.conditional_response and self.request and \
                 self.request.range and self.request.range.ranges and \
                 not self.content_range:
@@ -1179,18 +1319,38 @@ class Response(object):
                 realm = 'unknown'
         except (AttributeError, ValueError):
             realm = 'unknown'
-        return 'Swift realm="%s"' % realm
+        return 'Swift realm="%s"' % urllib2.quote(realm)
 
     @property
     def is_success(self):
         return self.status_int // 100 == 2
 
     def __call__(self, env, start_response):
+        """
+        Respond to the WSGI request.
+
+        .. warning::
+
+            This will translate any relative Location header value to an
+            absolute URL using the WSGI environment's HOST_URL as a
+            prefix, as RFC 2616 specifies.
+
+            However, it is quite common to use relative redirects,
+            especially when it is difficult to know the exact HOST_URL
+            the browser would have used when behind several CNAMEs, CDN
+            services, etc. All modern browsers support relative
+            redirects.
+
+            To skip over RFC enforcement of the Location header value,
+            you may set ``env['swift.leave_relative_location'] = True``
+            in the WSGI environment.
+        """
         if not self.request:
             self.request = Request(env)
         self.environ = env
         app_iter = self._response_iter(self.app_iter, self._body)
-        if 'location' in self.headers:
+        if 'location' in self.headers and \
+                not env.get('swift.leave_relative_location'):
             self.location = self.absolute_location()
         start_response(self.status, self.headers.items())
         return app_iter

@@ -21,8 +21,7 @@ from random import random
 from eventlet import Timeout
 
 import swift.common.db
-from swift.container import server as container_server
-from swift.container.backend import ContainerBroker
+from swift.container.backend import ContainerBroker, DATADIR
 from swift.common.utils import get_logger, audit_location_generator, \
     config_true_value, dump_recon_cache, ratelimit_sleep
 from swift.common.daemon import Daemon
@@ -31,9 +30,9 @@ from swift.common.daemon import Daemon
 class ContainerAuditor(Daemon):
     """Audit containers."""
 
-    def __init__(self, conf):
+    def __init__(self, conf, logger=None):
         self.conf = conf
-        self.logger = get_logger(conf, log_route='container-auditor')
+        self.logger = logger or get_logger(conf, log_route='container-auditor')
         self.devices = conf.get('devices', '/srv/node')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.interval = int(conf.get('interval', 1800))
@@ -49,8 +48,7 @@ class ContainerAuditor(Daemon):
         self.rcache = os.path.join(self.recon_cache_path, "container.recon")
 
     def _one_audit_pass(self, reported):
-        all_locs = audit_location_generator(self.devices,
-                                            container_server.DATADIR, '.db',
+        all_locs = audit_location_generator(self.devices, DATADIR, '.db',
                                             mount_check=self.mount_check,
                                             logger=self.logger)
         for path, device, partition in all_locs:
@@ -118,7 +116,7 @@ class ContainerAuditor(Daemon):
                 broker.get_info()
                 self.logger.increment('passes')
                 self.container_passes += 1
-                self.logger.debug(_('Audit passed for %s'), broker)
+                self.logger.debug('Audit passed for %s', broker)
         except (Exception, Timeout):
             self.logger.increment('failures')
             self.container_failures += 1

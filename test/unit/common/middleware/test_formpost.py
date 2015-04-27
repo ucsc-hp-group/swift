@@ -38,190 +38,34 @@ class FakeApp(object):
         self.check_no_query_string = check_no_query_string
 
     def __call__(self, env, start_response):
-        if self.check_no_query_string and env.get('QUERY_STRING'):
-            raise Exception('Query string %s should have been discarded!' %
-                            env['QUERY_STRING'])
-        body = ''
-        while True:
-            chunk = env['wsgi.input'].read()
-            if not chunk:
-                break
-            body += chunk
-        env['wsgi.input'] = StringIO(body)
-        self.requests.append(Request.blank('', environ=env))
-        if env.get('swift.authorize_override') and \
-                env.get('REMOTE_USER') != '.wsgi.pre_authed':
-            raise Exception(
-                'Invalid REMOTE_USER %r with swift.authorize_override' % (
-                    env.get('REMOTE_USER'),))
-        if 'swift.authorize' in env:
-            resp = env['swift.authorize'](self.requests[-1])
-            if resp:
-                return resp(env, start_response)
-        status, headers, body = self.status_headers_body_iter.next()
-        return Response(status=status, headers=headers,
-                        body=body)(env, start_response)
-
-
-class TestParseAttrs(unittest.TestCase):
-
-    def test_basic_content_type(self):
-        name, attrs = formpost._parse_attrs('text/plain')
-        self.assertEquals(name, 'text/plain')
-        self.assertEquals(attrs, {})
-
-    def test_content_type_with_charset(self):
-        name, attrs = formpost._parse_attrs('text/plain; charset=UTF8')
-        self.assertEquals(name, 'text/plain')
-        self.assertEquals(attrs, {'charset': 'UTF8'})
-
-    def test_content_disposition(self):
-        name, attrs = formpost._parse_attrs(
-            'form-data; name="somefile"; filename="test.html"')
-        self.assertEquals(name, 'form-data')
-        self.assertEquals(attrs, {'name': 'somefile', 'filename': 'test.html'})
-
-
-class TestIterRequests(unittest.TestCase):
-
-    def test_bad_start(self):
-        it = formpost._iter_requests(StringIO('blah'), 'unique')
-        exc = None
         try:
-            it.next()
-        except formpost.FormInvalid as err:
-            exc = err
-        self.assertEquals(str(exc), 'invalid starting boundary')
-
-    def test_empty(self):
-        it = formpost._iter_requests(StringIO('--unique'), 'unique')
-        fp = it.next()
-        self.assertEquals(fp.read(), '')
-        exc = None
-        try:
-            it.next()
-        except StopIteration as err:
-            exc = err
-        self.assertTrue(exc is not None)
-
-    def test_basic(self):
-        it = formpost._iter_requests(
-            StringIO('--unique\r\nabcdefg\r\n--unique--'), 'unique')
-        fp = it.next()
-        self.assertEquals(fp.read(), 'abcdefg')
-        exc = None
-        try:
-            it.next()
-        except StopIteration as err:
-            exc = err
-        self.assertTrue(exc is not None)
-
-    def test_basic2(self):
-        it = formpost._iter_requests(
-            StringIO('--unique\r\nabcdefg\r\n--unique\r\nhijkl\r\n--unique--'),
-            'unique')
-        fp = it.next()
-        self.assertEquals(fp.read(), 'abcdefg')
-        fp = it.next()
-        self.assertEquals(fp.read(), 'hijkl')
-        exc = None
-        try:
-            it.next()
-        except StopIteration as err:
-            exc = err
-        self.assertTrue(exc is not None)
-
-    def test_tiny_reads(self):
-        it = formpost._iter_requests(
-            StringIO('--unique\r\nabcdefg\r\n--unique\r\nhijkl\r\n--unique--'),
-            'unique')
-        fp = it.next()
-        self.assertEquals(fp.read(2), 'ab')
-        self.assertEquals(fp.read(2), 'cd')
-        self.assertEquals(fp.read(2), 'ef')
-        self.assertEquals(fp.read(2), 'g')
-        self.assertEquals(fp.read(2), '')
-        fp = it.next()
-        self.assertEquals(fp.read(), 'hijkl')
-        exc = None
-        try:
-            it.next()
-        except StopIteration as err:
-            exc = err
-        self.assertTrue(exc is not None)
-
-    def test_big_reads(self):
-        it = formpost._iter_requests(
-            StringIO('--unique\r\nabcdefg\r\n--unique\r\nhijkl\r\n--unique--'),
-            'unique')
-        fp = it.next()
-        self.assertEquals(fp.read(65536), 'abcdefg')
-        self.assertEquals(fp.read(), '')
-        fp = it.next()
-        self.assertEquals(fp.read(), 'hijkl')
-        exc = None
-        try:
-            it.next()
-        except StopIteration as err:
-            exc = err
-        self.assertTrue(exc is not None)
-
-    def test_broken_mid_stream(self):
-        # We go ahead and accept whatever is sent instead of rejecting the
-        # whole request, in case the partial form is still useful.
-        it = formpost._iter_requests(
-            StringIO('--unique\r\nabc'), 'unique')
-        fp = it.next()
-        self.assertEquals(fp.read(), 'abc')
-        exc = None
-        try:
-            it.next()
-        except StopIteration as err:
-            exc = err
-        self.assertTrue(exc is not None)
-
-    def test_readline(self):
-        it = formpost._iter_requests(
-            StringIO('--unique\r\nab\r\ncd\ref\ng\r\n--unique\r\nhi\r\n\r\n'
-                     'jkl\r\n\r\n--unique--'), 'unique')
-        fp = it.next()
-        self.assertEquals(fp.readline(), 'ab\r\n')
-        self.assertEquals(fp.readline(), 'cd\ref\ng')
-        self.assertEquals(fp.readline(), '')
-        fp = it.next()
-        self.assertEquals(fp.readline(), 'hi\r\n')
-        self.assertEquals(fp.readline(), '\r\n')
-        self.assertEquals(fp.readline(), 'jkl\r\n')
-        exc = None
-        try:
-            it.next()
-        except StopIteration as err:
-            exc = err
-        self.assertTrue(exc is not None)
-
-    def test_readline_with_tiny_chunks(self):
-        orig_read_chunk_size = formpost.READ_CHUNK_SIZE
-        try:
-            formpost.READ_CHUNK_SIZE = 2
-            it = formpost._iter_requests(
-                StringIO('--unique\r\nab\r\ncd\ref\ng\r\n--unique\r\nhi\r\n'
-                         '\r\njkl\r\n\r\n--unique--'), 'unique')
-            fp = it.next()
-            self.assertEquals(fp.readline(), 'ab\r\n')
-            self.assertEquals(fp.readline(), 'cd\ref\ng')
-            self.assertEquals(fp.readline(), '')
-            fp = it.next()
-            self.assertEquals(fp.readline(), 'hi\r\n')
-            self.assertEquals(fp.readline(), '\r\n')
-            self.assertEquals(fp.readline(), 'jkl\r\n')
-            exc = None
-            try:
-                it.next()
-            except StopIteration as err:
-                exc = err
-            self.assertTrue(exc is not None)
-        finally:
-            formpost.READ_CHUNK_SIZE = orig_read_chunk_size
+            if self.check_no_query_string and env.get('QUERY_STRING'):
+                raise Exception('Query string %s should have been discarded!' %
+                                env['QUERY_STRING'])
+            body = ''
+            while True:
+                chunk = env['wsgi.input'].read()
+                if not chunk:
+                    break
+                body += chunk
+            env['wsgi.input'] = StringIO(body)
+            self.requests.append(Request.blank('', environ=env))
+            if env.get('swift.authorize_override') and \
+                    env.get('REMOTE_USER') != '.wsgi.pre_authed':
+                raise Exception(
+                    'Invalid REMOTE_USER %r with swift.authorize_override' % (
+                        env.get('REMOTE_USER'),))
+            if 'swift.authorize' in env:
+                resp = env['swift.authorize'](self.requests[-1])
+                if resp:
+                    return resp(env, start_response)
+            status, headers, body = self.status_headers_body_iter.next()
+            return Response(status=status, headers=headers,
+                            body=body)(env, start_response)
+        except EOFError:
+            start_response('499 Client Disconnect',
+                           [('Content-Type', 'text/plain')])
+            return ['Client Disconnect\n']
 
 
 class TestCappedFileLikeObject(unittest.TestCase):
@@ -501,6 +345,7 @@ class TestFormPost(unittest.TestCase):
             'SERVER_PROTOCOL': 'HTTP/1.0',
             'swift.account/AUTH_test': self._fake_cache_env(
                 'AUTH_test', [key]),
+            'swift.container/AUTH_test/container': {'meta': {}},
             'wsgi.errors': wsgi_errors,
             'wsgi.input': wsgi_input,
             'wsgi.multiprocess': False,
@@ -613,6 +458,7 @@ class TestFormPost(unittest.TestCase):
             'SERVER_PROTOCOL': 'HTTP/1.0',
             'swift.account/AUTH_test': self._fake_cache_env(
                 'AUTH_test', [key]),
+            'swift.container/AUTH_test/container': {'meta': {}},
             'wsgi.errors': wsgi_errors,
             'wsgi.input': wsgi_input,
             'wsgi.multiprocess': False,
@@ -728,6 +574,7 @@ class TestFormPost(unittest.TestCase):
             'SERVER_PROTOCOL': 'HTTP/1.0',
             'swift.account/AUTH_test': self._fake_cache_env(
                 'AUTH_test', [key]),
+            'swift.container/AUTH_test/container': {'meta': {}},
             'wsgi.errors': wsgi_errors,
             'wsgi.input': wsgi_input,
             'wsgi.multiprocess': False,
@@ -839,6 +686,7 @@ class TestFormPost(unittest.TestCase):
             'SERVER_PROTOCOL': 'HTTP/1.0',
             'swift.account/AUTH_test': self._fake_cache_env(
                 'AUTH_test', [key]),
+            'swift.container/AUTH_test/container': {'meta': {}},
             'wsgi.errors': wsgi_errors,
             'wsgi.input': wsgi_input,
             'wsgi.multiprocess': False,
@@ -884,6 +732,7 @@ class TestFormPost(unittest.TestCase):
         env['wsgi.input'] = StringIO('XX' + '\r\n'.join(body))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -919,6 +768,7 @@ class TestFormPost(unittest.TestCase):
         env['wsgi.input'] = StringIO('\r\n'.join(body))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -949,6 +799,7 @@ class TestFormPost(unittest.TestCase):
         env['wsgi.input'] = StringIO('\r\n'.join(body))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -989,6 +840,7 @@ class TestFormPost(unittest.TestCase):
         env['wsgi.input'] = StringIO('\r\n'.join(body))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(
             iter([('201 Created', {}, ''),
                   ('201 Created', {}, '')]),
@@ -1023,6 +875,7 @@ class TestFormPost(unittest.TestCase):
         env['wsgi.input'] = StringIO('\r\n'.join(body))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('404 Not Found', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -1105,6 +958,7 @@ class TestFormPost(unittest.TestCase):
         ]))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -1172,6 +1026,7 @@ class TestFormPost(unittest.TestCase):
         ]))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -1211,6 +1066,7 @@ class TestFormPost(unittest.TestCase):
         env['wsgi.input'] = StringIO('\r\n'.join(body))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -1231,6 +1087,7 @@ class TestFormPost(unittest.TestCase):
         env['wsgi.input'] = StringIO('\r\n'.join(body))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         env['HTTP_ORIGIN'] = 'http://localhost:5000'
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created',
@@ -1259,6 +1116,7 @@ class TestFormPost(unittest.TestCase):
         # Stick it in X-Account-Meta-Temp-URL-Key-2 and make sure we get it
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', ['bert', key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -1271,11 +1129,46 @@ class TestFormPost(unittest.TestCase):
             status[0] = s
             headers[0] = h
         body = ''.join(self.formpost(env, start_response))
-        print repr(headers)
         self.assertEqual('303 See Other', status[0])
         self.assertEqual(
             'http://redirect?status=201&message=',
             dict(headers[0]).get('Location'))
+
+    def test_formpost_with_multiple_container_keys(self):
+        first_key = 'ernie'
+        second_key = 'bert'
+        keys = [first_key, second_key]
+
+        meta = {}
+        for idx, key in enumerate(keys):
+            meta_name = 'temp-url-key' + ("-%d" % (idx + 1) if idx else "")
+            if key:
+                meta[meta_name] = key
+
+        for key in keys:
+            sig, env, body = self._make_sig_env_body(
+                '/v1/AUTH_test/container', 'http://redirect', 1024, 10,
+                int(time() + 86400), key)
+            env['wsgi.input'] = StringIO('\r\n'.join(body))
+            env['swift.account/AUTH_test'] = self._fake_cache_env('AUTH_test')
+            # Stick it in X-Container-Meta-Temp-URL-Key-2 and ensure we get it
+            env['swift.container/AUTH_test/container'] = {'meta': meta}
+            self.app = FakeApp(iter([('201 Created', {}, ''),
+                                     ('201 Created', {}, '')]))
+            self.auth = tempauth.filter_factory({})(self.app)
+            self.formpost = formpost.filter_factory({})(self.auth)
+
+            status = [None]
+            headers = [None]
+
+            def start_response(s, h, e=None):
+                status[0] = s
+                headers[0] = h
+            body = ''.join(self.formpost(env, start_response))
+            self.assertEqual('303 See Other', status[0])
+            self.assertEqual(
+                'http://redirect?status=201&message=',
+                dict(headers[0]).get('Location'))
 
     def test_redirect(self):
         key = 'abc'
@@ -1285,6 +1178,7 @@ class TestFormPost(unittest.TestCase):
         env['wsgi.input'] = StringIO('\r\n'.join(body))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -1322,6 +1216,7 @@ class TestFormPost(unittest.TestCase):
         env['wsgi.input'] = StringIO('\r\n'.join(body))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -1359,6 +1254,7 @@ class TestFormPost(unittest.TestCase):
         env['wsgi.input'] = StringIO('\r\n'.join(body))
         env['swift.account/AUTH_test'] = self._fake_cache_env(
             'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
         self.app = FakeApp(iter([('201 Created', {}, ''),
                                  ('201 Created', {}, '')]))
         self.auth = tempauth.filter_factory({})(self.app)
@@ -1692,6 +1588,158 @@ class TestFormPost(unittest.TestCase):
         self.assertEquals(location, None)
         self.assertEquals(exc_info, None)
         self.assertTrue('FormPost: expired not an integer' in body)
+
+    def test_x_delete_at(self):
+        delete_at = int(time() + 100)
+        x_delete_body_part = [
+            '------WebKitFormBoundaryNcxTqxSlX7t4TDkR',
+            'Content-Disposition: form-data; name="x_delete_at"',
+            '',
+            str(delete_at),
+        ]
+        key = 'abc'
+        sig, env, body = self._make_sig_env_body(
+            '/v1/AUTH_test/container', '', 1024, 10, int(time() + 86400), key)
+        env['wsgi.input'] = StringIO('\r\n'.join(x_delete_body_part + body))
+        env['swift.account/AUTH_test'] = self._fake_cache_env(
+            'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
+        self.app = FakeApp(iter([('201 Created', {}, ''),
+                                 ('201 Created', {}, '')]))
+        self.auth = tempauth.filter_factory({})(self.app)
+        self.formpost = formpost.filter_factory({})(self.auth)
+        status = [None]
+        headers = [None]
+        exc_info = [None]
+
+        def start_response(s, h, e=None):
+            status[0] = s
+            headers[0] = h
+            exc_info[0] = e
+
+        body = ''.join(self.formpost(env, start_response))
+        status = status[0]
+        headers = headers[0]
+        exc_info = exc_info[0]
+        self.assertEquals(status, '201 Created')
+        self.assertTrue('201 Created' in body)
+        self.assertEquals(len(self.app.requests), 2)
+        self.assertTrue("X-Delete-At" in self.app.requests[0].headers)
+        self.assertTrue("X-Delete-At" in self.app.requests[1].headers)
+        self.assertEquals(delete_at,
+                          self.app.requests[0].headers["X-Delete-At"])
+        self.assertEquals(delete_at,
+                          self.app.requests[1].headers["X-Delete-At"])
+
+    def test_x_delete_at_not_int(self):
+        delete_at = "2014-07-16"
+        x_delete_body_part = [
+            '------WebKitFormBoundaryNcxTqxSlX7t4TDkR',
+            'Content-Disposition: form-data; name="x_delete_at"',
+            '',
+            str(delete_at),
+        ]
+        key = 'abc'
+        sig, env, body = self._make_sig_env_body(
+            '/v1/AUTH_test/container', '', 1024, 10, int(time() + 86400), key)
+        env['wsgi.input'] = StringIO('\r\n'.join(x_delete_body_part + body))
+        env['swift.account/AUTH_test'] = self._fake_cache_env(
+            'AUTH_test', [key])
+        self.app = FakeApp(iter([('201 Created', {}, ''),
+                                 ('201 Created', {}, '')]))
+        self.auth = tempauth.filter_factory({})(self.app)
+        self.formpost = formpost.filter_factory({})(self.auth)
+        status = [None]
+        headers = [None]
+        exc_info = [None]
+
+        def start_response(s, h, e=None):
+            status[0] = s
+            headers[0] = h
+            exc_info[0] = e
+
+        body = ''.join(self.formpost(env, start_response))
+        status = status[0]
+        headers = headers[0]
+        exc_info = exc_info[0]
+        self.assertEquals(status, '400 Bad Request')
+        self.assertTrue('FormPost: x_delete_at not an integer' in body)
+
+    def test_x_delete_after(self):
+        delete_after = 100
+        x_delete_body_part = [
+            '------WebKitFormBoundaryNcxTqxSlX7t4TDkR',
+            'Content-Disposition: form-data; name="x_delete_after"',
+            '',
+            str(delete_after),
+        ]
+        key = 'abc'
+        sig, env, body = self._make_sig_env_body(
+            '/v1/AUTH_test/container', '', 1024, 10, int(time() + 86400), key)
+        env['wsgi.input'] = StringIO('\r\n'.join(x_delete_body_part + body))
+        env['swift.account/AUTH_test'] = self._fake_cache_env(
+            'AUTH_test', [key])
+        env['swift.container/AUTH_test/container'] = {'meta': {}}
+        self.app = FakeApp(iter([('201 Created', {}, ''),
+                                 ('201 Created', {}, '')]))
+        self.auth = tempauth.filter_factory({})(self.app)
+        self.formpost = formpost.filter_factory({})(self.auth)
+        status = [None]
+        headers = [None]
+        exc_info = [None]
+
+        def start_response(s, h, e=None):
+            status[0] = s
+            headers[0] = h
+            exc_info[0] = e
+
+        body = ''.join(self.formpost(env, start_response))
+        status = status[0]
+        headers = headers[0]
+        exc_info = exc_info[0]
+        self.assertEquals(status, '201 Created')
+        self.assertTrue('201 Created' in body)
+        self.assertEquals(len(self.app.requests), 2)
+        self.assertTrue("X-Delete-After" in self.app.requests[0].headers)
+        self.assertTrue("X-Delete-After" in self.app.requests[1].headers)
+        self.assertEqual(delete_after,
+                         self.app.requests[0].headers["X-Delete-After"])
+        self.assertEqual(delete_after,
+                         self.app.requests[1].headers["X-Delete-After"])
+
+    def test_x_delete_after_not_int(self):
+        delete_after = "2 days"
+        x_delete_body_part = [
+            '------WebKitFormBoundaryNcxTqxSlX7t4TDkR',
+            'Content-Disposition: form-data; name="x_delete_after"',
+            '',
+            str(delete_after),
+        ]
+        key = 'abc'
+        sig, env, body = self._make_sig_env_body(
+            '/v1/AUTH_test/container', '', 1024, 10, int(time() + 86400), key)
+        env['wsgi.input'] = StringIO('\r\n'.join(x_delete_body_part + body))
+        env['swift.account/AUTH_test'] = self._fake_cache_env(
+            'AUTH_test', [key])
+        self.app = FakeApp(iter([('201 Created', {}, ''),
+                                 ('201 Created', {}, '')]))
+        self.auth = tempauth.filter_factory({})(self.app)
+        self.formpost = formpost.filter_factory({})(self.auth)
+        status = [None]
+        headers = [None]
+        exc_info = [None]
+
+        def start_response(s, h, e=None):
+            status[0] = s
+            headers[0] = h
+            exc_info[0] = e
+
+        body = ''.join(self.formpost(env, start_response))
+        status = status[0]
+        headers = headers[0]
+        exc_info = exc_info[0]
+        self.assertEquals(status, '400 Bad Request')
+        self.assertTrue('FormPost: x_delete_after not an integer' in body)
 
 
 if __name__ == '__main__':

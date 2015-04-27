@@ -15,48 +15,87 @@
 
 import os
 import urllib
+import time
+from urllib import unquote
 from ConfigParser import ConfigParser, NoSectionError, NoOptionError
 
-from swift.common.utils import ismount
+from swift.common import utils, exceptions
 from swift.common.swob import HTTPBadRequest, HTTPLengthRequired, \
-    HTTPRequestEntityTooLarge
+    HTTPRequestEntityTooLarge, HTTPPreconditionFailed, HTTPNotImplemented, \
+    HTTPException
 
-constraints_conf = ConfigParser()
-constraints_conf.read('/etc/swift/swift.conf')
+MAX_FILE_SIZE = 5368709122
+MAX_META_NAME_LENGTH = 128
+MAX_META_VALUE_LENGTH = 256
+MAX_META_COUNT = 90
+MAX_META_OVERALL_SIZE = 4096
+MAX_HEADER_SIZE = 8192
+MAX_OBJECT_NAME_LENGTH = 1024
+CONTAINER_LISTING_LIMIT = 10000
+ACCOUNT_LISTING_LIMIT = 10000
+MAX_ACCOUNT_NAME_LENGTH = 256
+MAX_CONTAINER_NAME_LENGTH = 256
+VALID_API_VERSIONS = ["v1", "v1.0"]
+
+# If adding an entry to DEFAULT_CONSTRAINTS, note that
+# these constraints are automatically published by the
+# proxy server in responses to /info requests, with values
+# updated by reload_constraints()
+DEFAULT_CONSTRAINTS = {
+    'max_file_size': MAX_FILE_SIZE,
+    'max_meta_name_length': MAX_META_NAME_LENGTH,
+    'max_meta_value_length': MAX_META_VALUE_LENGTH,
+    'max_meta_count': MAX_META_COUNT,
+    'max_meta_overall_size': MAX_META_OVERALL_SIZE,
+    'max_header_size': MAX_HEADER_SIZE,
+    'max_object_name_length': MAX_OBJECT_NAME_LENGTH,
+    'container_listing_limit': CONTAINER_LISTING_LIMIT,
+    'account_listing_limit': ACCOUNT_LISTING_LIMIT,
+    'max_account_name_length': MAX_ACCOUNT_NAME_LENGTH,
+    'max_container_name_length': MAX_CONTAINER_NAME_LENGTH,
+    'valid_api_versions': VALID_API_VERSIONS,
+}
+
+SWIFT_CONSTRAINTS_LOADED = False
+OVERRIDE_CONSTRAINTS = {}  # any constraints overridden by SWIFT_CONF_FILE
+EFFECTIVE_CONSTRAINTS = {}  # populated by reload_constraints
 
 
-def constraints_conf_int(name, default):
-    try:
-        return int(constraints_conf.get('swift-constraints', name))
-    except (NoSectionError, NoOptionError):
-        return default
+def reload_constraints():
+    """
+    Parse SWIFT_CONF_FILE and reset module level global contraint attrs,
+    populating OVERRIDE_CONSTRAINTS AND EFFECTIVE_CONSTRAINTS along the way.
+    """
+    global SWIFT_CONSTRAINTS_LOADED, OVERRIDE_CONSTRAINTS
+    SWIFT_CONSTRAINTS_LOADED = False
+    OVERRIDE_CONSTRAINTS = {}
+    constraints_conf = ConfigParser()
+    if constraints_conf.read(utils.SWIFT_CONF_FILE):
+        SWIFT_CONSTRAINTS_LOADED = True
+        for name in DEFAULT_CONSTRAINTS:
+            try:
+                value = constraints_conf.get('swift-constraints', name)
+            except NoOptionError:
+                pass
+            except NoSectionError:
+                # We are never going to find the section for another option
+                break
+            else:
+                try:
+                    value = int(value)
+                except ValueError:
+                    value = utils.list_from_csv(value)
+                OVERRIDE_CONSTRAINTS[name] = value
+    for name, default in DEFAULT_CONSTRAINTS.items():
+        value = OVERRIDE_CONSTRAINTS.get(name, default)
+        EFFECTIVE_CONSTRAINTS[name] = value
+        # "globals" in this context is module level globals, always.
+        globals()[name.upper()] = value
 
 
-#: Max file size allowed for objects
-MAX_FILE_SIZE = constraints_conf_int('max_file_size',
-                                     5368709122)  # 5 * 1024 * 1024 * 1024 + 2
-#: Max length of the name of a key for metadata
-MAX_META_NAME_LENGTH = constraints_conf_int('max_meta_name_length', 128)
-#: Max length of the value of a key for metadata
-MAX_META_VALUE_LENGTH = constraints_conf_int('max_meta_value_length', 256)
-#: Max number of metadata items
-MAX_META_COUNT = constraints_conf_int('max_meta_count', 90)
-#: Max overall size of metadata
-MAX_META_OVERALL_SIZE = constraints_conf_int('max_meta_overall_size', 4096)
-#: Max size of any header
-MAX_HEADER_SIZE = constraints_conf_int('max_header_size', 8192)
-#: Max object name length
-MAX_OBJECT_NAME_LENGTH = constraints_conf_int('max_object_name_length', 1024)
-#: Max object list length of a get request for a container
-CONTAINER_LISTING_LIMIT = constraints_conf_int('container_listing_limit',
-                                               10000)
-#: Max container list length of a get request for an account
-ACCOUNT_LISTING_LIMIT = constraints_conf_int('account_listing_limit', 10000)
-#: Max account name length
-MAX_ACCOUNT_NAME_LENGTH = constraints_conf_int('max_account_name_length', 256)
-#: Max container name length
-MAX_CONTAINER_NAME_LENGTH = constraints_conf_int('max_container_name_length',
-                                                 256)
+reload_constraints()
+
+
 # Maximum slo segments in buffer
 MAX_BUFFERED_SLO_SEGMENTS = 10000
 
@@ -68,7 +107,10 @@ FORMAT2CONTENT_TYPE = {'plain': 'text/plain', 'json': 'application/json',
 
 def check_metadata(req, target_type):
     """
-    Check metadata sent in the request headers.
+    Check metadata sent in the request headers.  This should only check
+    that the metadata in the request given is valid.  Checks against
+    account/container overall metadata should be forwarded on to its
+    respective server to be checked.
 
     :param req: request object
     :param target_type: str: one of: object, container, or account: indicates
@@ -123,40 +165,62 @@ def check_object_creation(req, object_name):
                                  a chunked request
     :returns HTTPBadRequest: missing or bad content-type header, or
                              bad metadata
+    :returns HTTPNotImplemented: unsupported transfer-encoding header value
     """
-    if req.content_length and req.content_length > MAX_FILE_SIZE:
+    try:
+        ml = req.message_length()
+    except ValueError as e:
+        return HTTPBadRequest(request=req, content_type='text/plain',
+                              body=str(e))
+    except AttributeError as e:
+        return HTTPNotImplemented(request=req, content_type='text/plain',
+                                  body=str(e))
+    if ml is not None and ml > MAX_FILE_SIZE:
         return HTTPRequestEntityTooLarge(body='Your request is too large.',
                                          request=req,
                                          content_type='text/plain')
     if req.content_length is None and \
             req.headers.get('transfer-encoding') != 'chunked':
-        return HTTPLengthRequired(request=req)
+        return HTTPLengthRequired(body='Missing Content-Length header.',
+                                  request=req,
+                                  content_type='text/plain')
+
     if 'X-Copy-From' in req.headers and req.content_length:
         return HTTPBadRequest(body='Copy requests require a zero byte body',
                               request=req, content_type='text/plain')
+
     if len(object_name) > MAX_OBJECT_NAME_LENGTH:
         return HTTPBadRequest(body='Object name length of %d longer than %d' %
                               (len(object_name), MAX_OBJECT_NAME_LENGTH),
                               request=req, content_type='text/plain')
+
     if 'Content-Type' not in req.headers:
         return HTTPBadRequest(request=req, content_type='text/plain',
                               body='No content type')
+
+    try:
+        req = check_delete_headers(req)
+    except HTTPException as e:
+        return HTTPBadRequest(request=req, body=e.body,
+                              content_type='text/plain')
+
     if not check_utf8(req.headers['Content-Type']):
         return HTTPBadRequest(request=req, body='Invalid Content-Type',
                               content_type='text/plain')
-    if 'x-object-manifest' in req.headers:
-        value = req.headers['x-object-manifest']
-        container = prefix = None
-        try:
-            container, prefix = value.split('/', 1)
-        except ValueError:
-            pass
-        if not container or not prefix or '?' in value or '&' in value or \
-                prefix[0] == '/':
-            return HTTPBadRequest(
-                request=req,
-                body='X-Object-Manifest must in the format container/prefix')
     return check_metadata(req, 'object')
+
+
+def check_dir(root, drive):
+    """
+    Verify that the path to the device is a directory and is a lesser
+    constraint that is enforced when a full mount_check isn't possible
+    with, for instance, a VM using loopback or partitions.
+
+    :param root:  base path where the dir is
+    :param drive: drive name to be checked
+    :returns: True if it is a valid directoy, False otherwise
+    """
+    return os.path.isdir(os.path.join(root, drive))
 
 
 def check_mount(root, drive):
@@ -173,7 +237,7 @@ def check_mount(root, drive):
     if not (urllib.quote_plus(drive) == drive):
         return False
     path = os.path.join(root, drive)
-    return ismount(path)
+    return utils.ismount(path)
 
 
 def check_float(string):
@@ -188,6 +252,62 @@ def check_float(string):
         return True
     except ValueError:
         return False
+
+
+def valid_timestamp(request):
+    """
+    Helper function to extract a timestamp from requests that require one.
+
+    :param request: the swob request object
+
+    :returns: a valid Timestamp instance
+    :raises: HTTPBadRequest on missing or invalid X-Timestamp
+    """
+    try:
+        return request.timestamp
+    except exceptions.InvalidTimestamp as e:
+        raise HTTPBadRequest(body=str(e), request=request,
+                             content_type='text/plain')
+
+
+def check_delete_headers(request):
+    """
+    Validate if 'x-delete' headers are have correct values
+    values should be positive integers and correspond to
+    a time in the future.
+
+    :param request: the swob request object
+
+    :returns: HTTPBadRequest in case of invalid values
+              or None if values are ok
+    """
+    if 'x-delete-after' in request.headers:
+        try:
+            x_delete_after = int(request.headers['x-delete-after'])
+        except ValueError:
+            raise HTTPBadRequest(request=request,
+                                 content_type='text/plain',
+                                 body='Non-integer X-Delete-After')
+        actual_del_time = time.time() + x_delete_after
+        if actual_del_time < time.time():
+            raise HTTPBadRequest(request=request,
+                                 content_type='text/plain',
+                                 body='X-Delete-After in past')
+        request.headers['x-delete-at'] = utils.normalize_delete_at_timestamp(
+            actual_del_time)
+
+    if 'x-delete-at' in request.headers:
+        try:
+            x_delete_at = int(utils.normalize_delete_at_timestamp(
+                int(request.headers['x-delete-at'])))
+        except ValueError:
+            raise HTTPBadRequest(request=request, content_type='text/plain',
+                                 body='Non-integer X-Delete-At')
+
+        if x_delete_at < time.time():
+            raise HTTPBadRequest(request=request, content_type='text/plain',
+                                 body='X-Delete-At in past')
+    return request
 
 
 def check_utf8(string):
@@ -205,9 +325,106 @@ def check_utf8(string):
         if isinstance(string, unicode):
             string.encode('utf-8')
         else:
-            string.decode('UTF-8')
+            decoded = string.decode('UTF-8')
+            if decoded.encode('UTF-8') != string:
+                return False
+            # A UTF-8 string with surrogates in it is invalid.
+            if any(0xD800 <= ord(codepoint) <= 0xDFFF
+                   for codepoint in decoded):
+                return False
         return '\x00' not in string
     # If string is unicode, decode() will raise UnicodeEncodeError
     # So, we should catch both UnicodeDecodeError & UnicodeEncodeError
     except UnicodeError:
         return False
+
+
+def check_path_header(req, name, length, error_msg):
+    """
+    Validate that the value of path-like header is
+    well formatted. We assume the caller ensures that
+    specific header is present in req.headers.
+
+    :param req: HTTP request object
+    :param name: header name
+    :param length: length of path segment check
+    :param error_msg: error message for client
+    :returns: A tuple with path parts according to length
+    :raise: HTTPPreconditionFailed if header value
+            is not well formatted.
+    """
+    src_header = unquote(req.headers.get(name))
+    if not src_header.startswith('/'):
+        src_header = '/' + src_header
+    try:
+        return utils.split_path(src_header, length, length, True)
+    except ValueError:
+        raise HTTPPreconditionFailed(
+            request=req,
+            body=error_msg)
+
+
+def check_copy_from_header(req):
+    """
+    Validate that the value from x-copy-from header is
+    well formatted. We assume the caller ensures that
+    x-copy-from header is present in req.headers.
+
+    :param req: HTTP request object
+    :returns: A tuple with container name and object name
+    :raise: HTTPPreconditionFailed if x-copy-from value
+            is not well formatted.
+    """
+    return check_path_header(req, 'X-Copy-From', 2,
+                             'X-Copy-From header must be of the form '
+                             '<container name>/<object name>')
+
+
+def check_destination_header(req):
+    """
+    Validate that the value from destination header is
+    well formatted. We assume the caller ensures that
+    destination header is present in req.headers.
+
+    :param req: HTTP request object
+    :returns: A tuple with container name and object name
+    :raise: HTTPPreconditionFailed if destination value
+            is not well formatted.
+    """
+    return check_path_header(req, 'Destination', 2,
+                             'Destination header must be of the form '
+                             '<container name>/<object name>')
+
+
+def check_account_format(req, account):
+    """
+    Validate that the header contains valid account name.
+    We assume the caller ensures that
+    destination header is present in req.headers.
+
+    :param req: HTTP request object
+    :returns: A properly encoded account name
+    :raise: HTTPPreconditionFailed if account header
+            is not well formatted.
+    """
+    if not account:
+        raise HTTPPreconditionFailed(
+            request=req,
+            body='Account name cannot be empty')
+    if isinstance(account, unicode):
+        account = account.encode('utf-8')
+    if '/' in account:
+        raise HTTPPreconditionFailed(
+            request=req,
+            body='Account name cannot contain slashes')
+    return account
+
+
+def valid_api_version(version):
+    """ Checks if the requested version is valid.
+
+    Currently Swift only supports "v1" and "v1.0". """
+    global VALID_API_VERSIONS
+    if not isinstance(VALID_API_VERSIONS, list):
+        VALID_API_VERSIONS = [str(VALID_API_VERSIONS)]
+    return version in VALID_API_VERSIONS

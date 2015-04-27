@@ -15,18 +15,22 @@
 
 import os
 import time
+import random
 import shutil
 import tempfile
 import unittest
 
 from logging import DEBUG
-from mock import patch
+from mock import patch, call, DEFAULT
 from contextlib import nested
 
 from swift.account import reaper
-from swift.account.server import DATADIR
+from swift.account.backend import DATADIR
 from swift.common.exceptions import ClientException
 from swift.common.utils import normalize_timestamp
+
+from test import unit
+from swift.common.storage_policy import StoragePolicy, POLICIES
 
 
 class FakeLogger(object):
@@ -44,6 +48,9 @@ class FakeLogger(object):
         self.exp = []
 
     def info(self, msg, *args):
+        self.msg = msg
+
+    def error(self, msg, *args):
         self.msg = msg
 
     def timing_since(*args, **kwargs):
@@ -67,7 +74,7 @@ class FakeBroker(object):
         return self.info
 
 
-class FakeAccountBroker():
+class FakeAccountBroker(object):
     def __init__(self, containers):
         self.containers = containers
 
@@ -87,19 +94,19 @@ class FakeAccountBroker():
         return False
 
 
-class FakeRing():
+class FakeRing(object):
     def __init__(self):
         self.nodes = [{'id': '1',
                        'ip': '10.10.10.1',
-                       'port': None,
+                       'port': 6002,
                        'device': None},
                       {'id': '2',
                        'ip': '10.10.10.1',
-                       'port': None,
+                       'port': 6002,
                        'device': None},
                       {'id': '3',
                        'ip': '10.10.10.1',
-                       'port': None,
+                       'port': 6002,
                        'device': None},
                       ]
 
@@ -108,6 +115,7 @@ class FakeRing():
 
     def get_part_nodes(self, *args, **kwargs):
         return self.nodes
+
 
 acc_nodes = [{'device': 'sda1',
               'ip': '',
@@ -130,6 +138,10 @@ cont_nodes = [{'device': 'sda1',
                'port': ''}]
 
 
+@unit.patch_policies([StoragePolicy(0, 'zero', False,
+                                    object_ring=unit.FakeRing()),
+                      StoragePolicy(1, 'one', True,
+                                    object_ring=unit.FakeRing(replicas=4))])
 class TestReaper(unittest.TestCase):
 
     def setUp(self):
@@ -149,9 +161,6 @@ class TestReaper(unittest.TestCase):
         if self.amount_fail < self.max_fail:
             self.amount_fail += 1
             raise self.myexp
-
-    def fake_object_ring(self):
-        return FakeRing()
 
     def fake_direct_delete_container(self, *args, **kwargs):
         if self.amount_delete_fail < self.max_delete_fail:
@@ -190,7 +199,12 @@ class TestReaper(unittest.TestCase):
             fd.write('')
         return devices_path
 
-    def init_reaper(self, conf={}, myips=['10.10.10.1'], fakelogger=False):
+    def init_reaper(self, conf=None, myips=None, fakelogger=False):
+        if conf is None:
+            conf = {}
+        if myips is None:
+            myips = ['10.10.10.1']
+
         r = reaper.AccountReaper(conf)
         r.stats_return_codes = {}
         r.stats_containers_deleted = 0
@@ -201,7 +215,7 @@ class TestReaper(unittest.TestCase):
         r.stats_objects_possibly_remaining = 0
         r.myips = myips
         if fakelogger:
-            r.logger = FakeLogger()
+            r.logger = unit.debug_logger('test-reaper')
         return r
 
     def fake_reap_account(self, *args, **kwargs):
@@ -260,29 +274,109 @@ class TestReaper(unittest.TestCase):
             reaper.time = time_orig
 
     def test_reap_object(self):
-        r = self.init_reaper({}, fakelogger=True)
-        self.amount_fail = 0
-        self.max_fail = 0
-        with patch('swift.account.reaper.AccountReaper.get_object_ring',
-                   self.fake_object_ring):
-            with patch('swift.account.reaper.direct_delete_object',
-                       self.fake_direct_delete_object):
-                r.reap_object('a', 'c', 'partition', cont_nodes, 'o')
-        self.assertEqual(r.stats_objects_deleted, 3)
+        conf = {
+            'mount_check': 'false',
+        }
+        r = reaper.AccountReaper(conf, logger=unit.debug_logger())
+        ring = unit.FakeRing()
+        mock_path = 'swift.account.reaper.direct_delete_object'
+        for policy in POLICIES:
+            r.reset_stats()
+            with patch(mock_path) as fake_direct_delete:
+                r.reap_object('a', 'c', 'partition', cont_nodes, 'o',
+                              policy.idx)
+                for i, call_args in enumerate(
+                        fake_direct_delete.call_args_list):
+                    cnode = cont_nodes[i % len(cont_nodes)]
+                    host = '%(ip)s:%(port)s' % cnode
+                    device = cnode['device']
+                    headers = {
+                        'X-Container-Host': host,
+                        'X-Container-Partition': 'partition',
+                        'X-Container-Device': device,
+                        'X-Backend-Storage-Policy-Index': policy.idx
+                    }
+                    ring = r.get_object_ring(policy.idx)
+                    expected = call(dict(ring.devs[i], index=i), 0,
+                                    'a', 'c', 'o',
+                                    headers=headers, conn_timeout=0.5,
+                                    response_timeout=10)
+                    self.assertEqual(call_args, expected)
+            self.assertEqual(r.stats_objects_deleted,
+                             policy.object_ring.replicas)
 
     def test_reap_object_fail(self):
         r = self.init_reaper({}, fakelogger=True)
         self.amount_fail = 0
         self.max_fail = 1
-        ctx = [patch('swift.account.reaper.AccountReaper.get_object_ring',
-                     self.fake_object_ring),
-               patch('swift.account.reaper.direct_delete_object',
-                     self.fake_direct_delete_object)]
-        with nested(*ctx):
-            r.reap_object('a', 'c', 'partition', cont_nodes, 'o')
-        self.assertEqual(r.stats_objects_deleted, 1)
+        policy = random.choice(list(POLICIES))
+        with patch('swift.account.reaper.direct_delete_object',
+                   self.fake_direct_delete_object):
+            r.reap_object('a', 'c', 'partition', cont_nodes, 'o',
+                          policy.idx)
+        # IMHO, the stat handling in the node loop of reap object is
+        # over indented, but no one has complained, so I'm not inclined
+        # to move it.  However it's worth noting we're currently keeping
+        # stats on deletes per *replica* - which is rather obvious from
+        # these tests, but this results is surprising because of some
+        # funny logic to *skip* increments on successful deletes of
+        # replicas until we have more successful responses than
+        # failures.  This means that while the first replica doesn't
+        # increment deleted because of the failure, the second one
+        # *does* get successfully deleted, but *also does not* increment
+        # the counter (!?).
+        #
+        # In the three replica case this leaves only the last deleted
+        # object incrementing the counter - in the four replica case
+        # this leaves the last two.
+        #
+        # Basically this test will always result in:
+        #   deleted == num_replicas - 2
+        self.assertEqual(r.stats_objects_deleted,
+                         policy.object_ring.replicas - 2)
         self.assertEqual(r.stats_objects_remaining, 1)
         self.assertEqual(r.stats_objects_possibly_remaining, 1)
+
+    def test_reap_object_non_exist_policy_index(self):
+        r = self.init_reaper({}, fakelogger=True)
+        r.reap_object('a', 'c', 'partition', cont_nodes, 'o', 2)
+        self.assertEqual(r.stats_objects_deleted, 0)
+        self.assertEqual(r.stats_objects_remaining, 1)
+        self.assertEqual(r.stats_objects_possibly_remaining, 0)
+
+    @patch('swift.account.reaper.Ring',
+           lambda *args, **kwargs: unit.FakeRing())
+    def test_reap_container(self):
+        policy = random.choice(list(POLICIES))
+        r = self.init_reaper({}, fakelogger=True)
+        with patch.multiple('swift.account.reaper',
+                            direct_get_container=DEFAULT,
+                            direct_delete_object=DEFAULT,
+                            direct_delete_container=DEFAULT) as mocks:
+            headers = {'X-Backend-Storage-Policy-Index': policy.idx}
+            obj_listing = [{'name': 'o'}]
+
+            def fake_get_container(*args, **kwargs):
+                try:
+                    obj = obj_listing.pop(0)
+                except IndexError:
+                    obj_list = []
+                else:
+                    obj_list = [obj]
+                return headers, obj_list
+
+            mocks['direct_get_container'].side_effect = fake_get_container
+            r.reap_container('a', 'partition', acc_nodes, 'c')
+            mock_calls = mocks['direct_delete_object'].call_args_list
+            self.assertEqual(policy.object_ring.replicas, len(mock_calls))
+            for call_args in mock_calls:
+                _args, kwargs = call_args
+                self.assertEqual(kwargs['headers']
+                                 ['X-Backend-Storage-Policy-Index'],
+                                 policy.idx)
+
+            self.assertEquals(mocks['direct_delete_container'].call_count, 3)
+        self.assertEqual(r.stats_objects_deleted, policy.object_ring.replicas)
 
     def test_reap_container_get_object_fail(self):
         r = self.init_reaper({}, fakelogger=True)
@@ -300,7 +394,7 @@ class TestReaper(unittest.TestCase):
                      self.fake_reap_object)]
         with nested(*ctx):
             r.reap_container('a', 'partition', acc_nodes, 'c')
-        self.assertEqual(r.logger.inc['return_codes.4'], 1)
+        self.assertEqual(r.logger.get_increment_counts()['return_codes.4'], 1)
         self.assertEqual(r.stats_containers_deleted, 1)
 
     def test_reap_container_partial_fail(self):
@@ -319,7 +413,7 @@ class TestReaper(unittest.TestCase):
                      self.fake_reap_object)]
         with nested(*ctx):
             r.reap_container('a', 'partition', acc_nodes, 'c')
-        self.assertEqual(r.logger.inc['return_codes.4'], 2)
+        self.assertEqual(r.logger.get_increment_counts()['return_codes.4'], 2)
         self.assertEqual(r.stats_containers_possibly_remaining, 1)
 
     def test_reap_container_full_fail(self):
@@ -338,8 +432,33 @@ class TestReaper(unittest.TestCase):
                      self.fake_reap_object)]
         with nested(*ctx):
             r.reap_container('a', 'partition', acc_nodes, 'c')
-        self.assertEqual(r.logger.inc['return_codes.4'], 3)
+        self.assertEqual(r.logger.get_increment_counts()['return_codes.4'], 3)
         self.assertEqual(r.stats_containers_remaining, 1)
+
+    @patch('swift.account.reaper.Ring',
+           lambda *args, **kwargs: unit.FakeRing())
+    def test_reap_container_non_exist_policy_index(self):
+        r = self.init_reaper({}, fakelogger=True)
+        with patch.multiple('swift.account.reaper',
+                            direct_get_container=DEFAULT,
+                            direct_delete_object=DEFAULT,
+                            direct_delete_container=DEFAULT) as mocks:
+            headers = {'X-Backend-Storage-Policy-Index': 2}
+            obj_listing = [{'name': 'o'}]
+
+            def fake_get_container(*args, **kwargs):
+                try:
+                    obj = obj_listing.pop(0)
+                except IndexError:
+                    obj_list = []
+                else:
+                    obj_list = [obj]
+                return headers, obj_list
+
+            mocks['direct_get_container'].side_effect = fake_get_container
+            r.reap_container('a', 'partition', acc_nodes, 'c')
+        self.assertEqual(r.logger.get_lines_for_level('error'), [
+            'ERROR: invalid storage policy index: 2'])
 
     def fake_reap_container(self, *args, **kwargs):
         self.called_amount += 1
@@ -364,13 +483,16 @@ class TestReaper(unittest.TestCase):
             nodes = r.get_account_ring().get_part_nodes()
             self.assertTrue(r.reap_account(broker, 'partition', nodes))
         self.assertEqual(self.called_amount, 4)
-        self.assertEqual(r.logger.msg.find('Completed pass'), 0)
-        self.assertTrue(r.logger.msg.find('1 containers deleted'))
-        self.assertTrue(r.logger.msg.find('1 objects deleted'))
-        self.assertTrue(r.logger.msg.find('1 containers remaining'))
-        self.assertTrue(r.logger.msg.find('1 objects remaining'))
-        self.assertTrue(r.logger.msg.find('1 containers possibly remaining'))
-        self.assertTrue(r.logger.msg.find('1 objects possibly remaining'))
+        info_lines = r.logger.get_lines_for_level('info')
+        self.assertEqual(len(info_lines), 2)
+        start_line, stat_line = info_lines
+        self.assertEqual(start_line, 'Beginning pass on account a')
+        self.assertTrue(stat_line.find('1 containers deleted'))
+        self.assertTrue(stat_line.find('1 objects deleted'))
+        self.assertTrue(stat_line.find('1 containers remaining'))
+        self.assertTrue(stat_line.find('1 objects remaining'))
+        self.assertTrue(stat_line.find('1 containers possibly remaining'))
+        self.assertTrue(stat_line.find('1 objects possibly remaining'))
 
     def test_reap_account_no_container(self):
         broker = FakeAccountBroker(tuple())
@@ -384,7 +506,8 @@ class TestReaper(unittest.TestCase):
         with nested(*ctx):
             nodes = r.get_account_ring().get_part_nodes()
             self.assertTrue(r.reap_account(broker, 'partition', nodes))
-        self.assertEqual(r.logger.msg.find('Completed pass'), 0)
+        self.assertTrue(r.logger.get_lines_for_level(
+            'info')[-1].startswith('Completed pass'))
         self.assertEqual(self.called_amount, 0)
 
     def test_reap_device(self):
@@ -480,7 +603,7 @@ class TestReaper(unittest.TestCase):
             with patch('swift.account.reaper.random.random', fake_random):
                 try:
                     r.run_forever()
-                except Exception, err:
+                except Exception as err:
                     pass
         self.assertEqual(self.val, 1)
         self.assertEqual(str(err), 'exit')

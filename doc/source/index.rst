@@ -42,9 +42,10 @@ Overview and Concepts
 .. toctree::
     :maxdepth: 1
 
-    Swift's API docs <http://docs.openstack.org/api/openstack-object-storage/1.0/content/>
+    api/object_api_v1_overview
     overview_architecture
     overview_ring
+    overview_policies
     overview_reaper
     overview_auth
     overview_replication
@@ -55,6 +56,8 @@ Overview and Concepts
     overview_expiring_objects
     cors
     crossdomain
+    overview_erasure_code
+    overview_backing_store
     associated_projects
 
 Developer Documentation
@@ -65,7 +68,9 @@ Developer Documentation
 
     development_guidelines
     development_saio
+    policies_saio
     development_auth
+    development_middleware
     development_ondisk_backends
 
 Administrator Documentation
@@ -79,6 +84,25 @@ Administrator Documentation
     apache_deployment_guide
     admin_guide
     replication_network
+    logs
+
+Object Storage v1 REST API Documentation
+========================================
+
+.. toctree::
+    :maxdepth: 1
+
+    api/object_api_v1_overview.rst
+    api/discoverability.rst
+    api/authentication.rst
+    api/container_quotas.rst
+    api/object_versioning.rst
+    api/large_objects.rst
+    api/temporary_url_middleware.rst
+    api/form_post_middleware.rst
+    api/use_content-encoding_metadata.rst
+    api/use_the_content-disposition_metadata.rst
+
 
 Source Documentation
 ====================
@@ -93,6 +117,7 @@ Source Documentation
     db
     object
     misc
+    middleware
 
 
 Indices and tables

@@ -18,20 +18,22 @@ import random
 from swift import gettext_ as _
 from logging import DEBUG
 from math import sqrt
-from time import time, ctime
+from time import time
+import itertools
 
 from eventlet import GreenPool, sleep, Timeout
 
 import swift.common.db
-from swift.account.server import DATADIR
-from swift.account.backend import AccountBroker
+from swift.account.backend import AccountBroker, DATADIR
 from swift.common.direct_client import direct_delete_container, \
     direct_delete_object, direct_get_container
 from swift.common.exceptions import ClientException
 from swift.common.ring import Ring
+from swift.common.ring.utils import is_local_device
 from swift.common.utils import get_logger, whataremyips, ismount, \
-    config_true_value
+    config_true_value, Timestamp
 from swift.common.daemon import Daemon
+from swift.common.storage_policy import POLICIES, PolicyError
 
 
 class AccountReaper(Daemon):
@@ -55,9 +57,9 @@ class AccountReaper(Daemon):
     configuration parameters.
     """
 
-    def __init__(self, conf):
+    def __init__(self, conf, logger=None):
         self.conf = conf
-        self.logger = get_logger(conf, log_route='account-reaper')
+        self.logger = logger or get_logger(conf, log_route='account-reaper')
         self.devices = conf.get('devices', '/srv/node')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.interval = int(conf.get('interval', 3600))
@@ -90,11 +92,14 @@ class AccountReaper(Daemon):
             self.container_ring = Ring(self.swift_dir, ring_name='container')
         return self.container_ring
 
-    def get_object_ring(self):
-        """The object :class:`swift.common.ring.Ring` for the cluster."""
-        if not self.object_ring:
-            self.object_ring = Ring(self.swift_dir, ring_name='object')
-        return self.object_ring
+    def get_object_ring(self, policy_idx):
+        """
+        Get the ring identified by the policy index
+
+        :param policy_idx: Storage policy index
+        :returns: A ring matching the storage policy
+        """
+        return POLICIES.get_object_ring(policy_idx, self.swift_dir)
 
     def run_forever(self, *args, **kwargs):
         """Main entry point when running the reaper in normal daemon mode.
@@ -102,7 +107,7 @@ class AccountReaper(Daemon):
         This repeatedly calls :func:`reap_once` no quicker than the
         configuration interval.
         """
-        self.logger.debug(_('Daemon started.'))
+        self.logger.debug('Daemon started.')
         sleep(random.random() * self.interval)
         while True:
             begin = time()
@@ -118,7 +123,7 @@ class AccountReaper(Daemon):
         repeatedly by :func:`run_forever`. This will call :func:`reap_device`
         once for each device on the server.
         """
-        self.logger.debug(_('Begin devices pass: %s'), self.devices)
+        self.logger.debug('Begin devices pass: %s', self.devices)
         begin = time()
         try:
             for device in os.listdir(self.devices):
@@ -156,8 +161,8 @@ class AccountReaper(Daemon):
             if not partition.isdigit():
                 continue
             nodes = self.get_account_ring().get_part_nodes(int(partition))
-            if nodes[0]['ip'] not in self.myips or \
-                    not os.path.isdir(partition_path):
+            if (not is_local_device(self.myips, None, nodes[0]['ip'], None)
+                    or not os.path.isdir(partition_path)):
                 continue
             for suffix in os.listdir(partition_path):
                 suffix_path = os.path.join(partition_path, suffix)
@@ -177,6 +182,15 @@ class AccountReaper(Daemon):
                             if broker.is_status_deleted() and \
                                     not broker.empty():
                                 self.reap_account(broker, partition, nodes)
+
+    def reset_stats(self):
+        self.stats_return_codes = {}
+        self.stats_containers_deleted = 0
+        self.stats_objects_deleted = 0
+        self.stats_containers_remaining = 0
+        self.stats_objects_remaining = 0
+        self.stats_containers_possibly_remaining = 0
+        self.stats_objects_possibly_remaining = 0
 
     def reap_account(self, broker, partition, nodes):
         """
@@ -217,17 +231,12 @@ class AccountReaper(Daemon):
         """
         begin = time()
         info = broker.get_info()
-        if time() - float(info['delete_timestamp']) <= self.delay_reaping:
+        if time() - float(Timestamp(info['delete_timestamp'])) <= \
+                self.delay_reaping:
             return False
         account = info['account']
         self.logger.info(_('Beginning pass on account %s'), account)
-        self.stats_return_codes = {}
-        self.stats_containers_deleted = 0
-        self.stats_objects_deleted = 0
-        self.stats_containers_remaining = 0
-        self.stats_objects_remaining = 0
-        self.stats_containers_possibly_remaining = 0
-        self.stats_objects_possibly_remaining = 0
+        self.reset_stats()
         try:
             marker = ''
             while True:
@@ -275,10 +284,11 @@ class AccountReaper(Daemon):
         log += _(', elapsed: %.02fs') % (time() - begin)
         self.logger.info(log)
         self.logger.timing_since('timing', self.start_time)
+        delete_timestamp = Timestamp(info['delete_timestamp'])
         if self.stats_containers_remaining and \
-           begin - float(info['delete_timestamp']) >= self.reap_not_done_after:
+           begin - float(delete_timestamp) >= self.reap_not_done_after:
             self.logger.warn(_('Account %s has not been reaped since %s') %
-                             (account, ctime(float(info['delete_timestamp']))))
+                             (account, delete_timestamp.isoformat))
         return True
 
     def reap_container(self, account, account_partition, account_nodes,
@@ -325,11 +335,11 @@ class AccountReaper(Daemon):
         while True:
             objects = None
             try:
-                objects = direct_get_container(
+                headers, objects = direct_get_container(
                     node, part, account, container,
                     marker=marker,
                     conn_timeout=self.conn_timeout,
-                    response_timeout=self.node_timeout)[1]
+                    response_timeout=self.node_timeout)
                 self.stats_return_codes[2] = \
                     self.stats_return_codes.get(2, 0) + 1
                 self.logger.increment('return_codes.2')
@@ -344,11 +354,16 @@ class AccountReaper(Daemon):
             if not objects:
                 break
             try:
+                policy_index = headers.get('X-Backend-Storage-Policy-Index', 0)
+                policy = POLICIES.get_by_index(policy_index)
+                if not policy:
+                    self.logger.error('ERROR: invalid storage policy index: %r'
+                                      % policy_index)
                 for obj in objects:
                     if isinstance(obj['name'], unicode):
                         obj['name'] = obj['name'].encode('utf8')
                     pool.spawn(self.reap_object, account, container, part,
-                               nodes, obj['name'])
+                               nodes, obj['name'], policy_index)
                 pool.waitall()
             except (Exception, Timeout):
                 self.logger.exception(_('Exception with objects for container '
@@ -397,7 +412,7 @@ class AccountReaper(Daemon):
             self.logger.increment('containers_possibly_remaining')
 
     def reap_object(self, account, container, container_partition,
-                    container_nodes, obj):
+                    container_nodes, obj, policy_index):
         """
         Deletes the given object by issuing a delete request to each node for
         the object. The format of the delete request is such that each object
@@ -413,16 +428,23 @@ class AccountReaper(Daemon):
                                     container ring.
         :param container_nodes: The primary node dicts for the container.
         :param obj: The name of the object to delete.
+        :param policy_index: The storage policy index of the object's container
 
         * See also: :func:`swift.common.ring.Ring.get_nodes` for a description
           of the container node dicts.
         """
-        container_nodes = list(container_nodes)
-        part, nodes = self.get_object_ring().get_nodes(account, container, obj)
+        cnodes = itertools.cycle(container_nodes)
+        try:
+            ring = self.get_object_ring(policy_index)
+        except PolicyError:
+            self.stats_objects_remaining += 1
+            self.logger.increment('objects_remaining')
+            return
+        part, nodes = ring.get_nodes(account, container, obj)
         successes = 0
         failures = 0
         for node in nodes:
-            cnode = container_nodes.pop()
+            cnode = next(cnodes)
             try:
                 direct_delete_object(
                     node, part, account, container, obj,
@@ -430,7 +452,8 @@ class AccountReaper(Daemon):
                     response_timeout=self.node_timeout,
                     headers={'X-Container-Host': '%(ip)s:%(port)s' % cnode,
                              'X-Container-Partition': str(container_partition),
-                             'X-Container-Device': cnode['device']})
+                             'X-Container-Device': cnode['device'],
+                             'X-Backend-Storage-Policy-Index': policy_index})
                 successes += 1
                 self.stats_return_codes[2] = \
                     self.stats_return_codes.get(2, 0) + 1
